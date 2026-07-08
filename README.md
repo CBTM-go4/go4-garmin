@@ -76,7 +76,10 @@ uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-au
 Then start the app (it launches the MCP for you):
 
 ```powershell
-.\scripts\run.ps1
+.\scripts\run.ps1              # Windows
+```
+```bash
+./scripts/run.sh              # macOS / Linux
 ```
 
 The token lasts ~6 months. Re-auth with `garmin-mcp-auth --force-reauth`.
