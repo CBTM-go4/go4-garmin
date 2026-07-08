@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Garmin Coach</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%83%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <h1>Garmin&nbsp;Coach<span class="dot">.</span></h1>
+        <span class="sub" id="subtitle">running &amp; recovery, coached</span>
+      </div>
+      <span class="spacer"></span>
+      <span class="badge demo" id="demoBadge" style="display:none">demo data</span>
+      <div class="controls">
+        <div class="seg" id="rangeSeg">
+          <button data-days="7">7d</button>
+          <button data-days="14">14d</button>
+          <button data-days="30">30d</button>
+          <button data-days="60">60d</button>
+          <button data-days="90" class="active">90d</button>
+          <button data-days="365">1y</button>
+        </div>
+        <button class="btn" id="refreshBtn" title="Clear cache & reload">↻ Refresh</button>
+      </div>
+    </header>
+
+    <div id="app">
+      <div class="loading">Loading your training…</div>
+    </div>
+  </div>
+
+  <div class="tt" id="tt"></div>
+  <div class="modal-bg" id="modalBg">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
