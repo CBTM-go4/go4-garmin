@@ -125,3 +125,7 @@ zones (otherwise HR max is inferred from your data, rest defaults to 48). See
 - The **fitness trend** starts sparse and fills in: VO₂max history is backfilled once
   in the background, and race-prediction points accumulate a day at a time.
 - Coaching is rule-based and explainable, not medical advice.
+
+## License
+
+[MIT](LICENSE) — free to use, modify and share. Not affiliated with Garmin.
