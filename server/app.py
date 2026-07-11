@@ -86,6 +86,12 @@ async def status():
     }
 
 
+# Days of training history to fetch *before* a window's start so the CTL (42d) and
+# ATL (7d) EMAs are warmed up rather than cold-started. ~120d decays the zero-seed
+# influence on CTL to <1%, so the fitness on the window's first day is accurate.
+CTL_WARMUP_DAYS = 120
+
+
 @app.get("/api/overview")
 async def overview(days: int = 90, start: str | None = None, end: str | None = None):
     g: GarminData = app.state.gd
@@ -113,8 +119,14 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
     # historical range must not write past-dated points.
     is_current = anchor >= real_today
     today = anchor  # local alias: the rest of this handler works off the window end
-    runs = await g.runs_between(start_d, today)
-    hrmax = metrics.hr_max(runs)
+    # CTL/ATL are exponential moving averages (42d / 7d) and ACWR needs a 28-day
+    # chronic base, so the fitness/fatigue on any given day depends on training
+    # BEFORE the visible window. Fetch a warm-up lead-in and compute load off the
+    # full history — otherwise the EMA cold-starts at the window's left edge and the
+    # same date reads differently depending on how far back the range begins.
+    hist_runs = await g.runs_between(start_d - timedelta(days=CTL_WARMUP_DAYS), today)
+    runs = [r for r in hist_runs if (rd := metrics._run_date(r)) and rd >= start_d]
+    hrmax = metrics.hr_max(hist_runs)
 
     ts = await _daily_with_fallback(g.training_status, today)
     ts = ts if isinstance(ts, dict) else {}
@@ -147,8 +159,8 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
         "hr_rest": metrics.HR_REST,
         "runs": runs,
         "summary": metrics.summarize_runs(runs),
-        "load_series": metrics.load_series(runs, hrmax, today, days=days),
-        "acwr": metrics.acwr(runs, hrmax, today),
+        "load_series": metrics.load_series(hist_runs, hrmax, today, days=days),
+        "acwr": metrics.acwr(hist_runs, hrmax, today),
         "weekly": metrics.weekly_mileage(runs, today),   # recent 12wk, for coach ramp check
         "volume": metrics.volume_series(runs, today, days),  # adaptive, for the chart
         "zones": metrics.approx_weekly_zones(runs, hrmax),
