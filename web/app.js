@@ -382,9 +382,12 @@ function render(app, d) {
   const recov = recoverySection(d);
   if (recov) app.append(recov);
 
-  // fitness trend (VO₂max + predicted times over time)
+  // fitness trend graph (VO₂max + realistic predicted times over time), with the
+  // current actual-times table directly below it.
   const ftc = fitnessTrend(d.fitness_trend);
   if (ftc) app.append(ftc);
+  const rp = racePredictions(d.my_predictions, d.potential_predictions, d.race_predictions);
+  if (rp) app.append(rp);
 
   // aerobic efficiency
   const eff = d.efficiency || [];
@@ -395,10 +398,6 @@ function render(app, d) {
     ec.append(lineChart(eff.map(e => ({ label: e.date, values: { eff: e.efficiency } })), [{ key: 'eff', name: 'Efficiency', color: '--efficiency' }], { height: 190, endLabels: false }));
     app.append(ec);
   }
-
-  // race predictions (just above insights)
-  const rp = racePredictions(d.my_predictions, d.potential_predictions, d.race_predictions);
-  if (rp) app.append(rp);
 
   // coach insights (below the charts)
   if (c.insights?.length) {
@@ -694,7 +693,7 @@ function fitnessTrend(ft) {
       const sign = v > 0 ? '+' : '';
       return `${secs ? fmtDur(secs) : '–'} (${sign}${v.toFixed(1)}%)`;
     };
-    card.append(h('div', { class: 'hint', style: 'margin-top:14px' }, 'Predicted race times · % faster than baseline (up = faster) — hover for the time'));
+    card.append(h('div', { class: 'hint', style: 'margin-top:14px' }, 'Realistic predicted race times · % faster than baseline (up = faster) — hover for the time'));
     card.append(legend(dists.map(dd => ({ name: dd.name, color: dd.color }))));
     card.append(lineChart(pts, dists.map(dd => ({ ...dd })),
       { height: 170, endLabels: true, decimals: 1, baseZero: true, tipFormat }));

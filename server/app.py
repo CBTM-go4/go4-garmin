@@ -149,13 +149,16 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
 
     recovery = await _recovery(g, today)
     race = await g.race_predictions()
-    fitness_trend = _fitness_trend(app, g, today, days, race, record=is_current)
 
     # Model race times from the athlete's own runs over a stable window (not the
     # selected chart range), so predictions don't vanish on a 7-day view.
     pred_runs = runs if days >= 120 else await g.runs_between(today - timedelta(days=120), today)
     my_predictions = metrics.predict_races(pred_runs, today)
     potential_predictions = metrics.predict_races_threshold(pred_runs, today, hrmax)
+
+    # The fitness trend tracks the *realistic* (your-runs) prediction, not Garmin's
+    # optimistic number — so the trajectory matches the Race Predictions table.
+    fitness_trend = _fitness_trend(app, g, today, days, my_predictions, record=is_current)
 
     ov: dict[str, Any] = {
         "available": True,
@@ -216,7 +219,7 @@ async def compare(days: int = 90, start: str | None = None, end: str | None = No
     }
 
 
-def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: Any,
+def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, predictions: Any,
                    record: bool = True) -> dict:
     """Accumulated VO2max + race-prediction trajectory (see history.py).
 
@@ -227,7 +230,7 @@ def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: An
         return demo.fitness_trend(today, days)
     if record:
         try:
-            history.record_today(today, None, race if isinstance(race, dict) else None)
+            history.record_today(today, None, predictions if isinstance(predictions, dict) else None)
         except Exception:  # noqa: BLE001
             pass
     missing = history.missing_vo2_dates(today, min(days, 120))
