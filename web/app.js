@@ -2,7 +2,13 @@
 const SVGNS = 'http://www.w3.org/2000/svg';
 const $ = (s, r = document) => r.querySelector(s);
 const tt = $('#tt');
-let state = { days: 90 };
+let state = { days: 90, start: null, end: null };
+// local-timezone-safe YYYY-MM-DD (toISOString would shift by the UTC offset)
+const isoDay = d => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
+// build the /api/overview query from the active preset OR custom range
+const rangeQuery = () => state.start ? `start=${state.start}&end=${state.end || ''}` : `days=${state.days}`;
+// how many days the current view spans (for labels)
+const spanDays = () => { if (!state.start) return state.days; const end = state.end ? new Date(state.end) : new Date(); return Math.max(Math.round((end - new Date(state.start)) / 86400000), 1); };
 
 // ---------- formatting ----------
 const fmtPace = s => { if (!s) return '–'; const m = Math.floor(s / 60), x = Math.round(s % 60); return `${m}:${String(x).padStart(2, '0')}/km`; };
@@ -181,7 +187,7 @@ async function load() {
   const app = $('#app');
   app.innerHTML = '<div class="loading">Loading your training…</div>';
   let data;
-  try { data = await (await fetch(`/api/overview?days=${state.days}`)).json(); }
+  try { data = await (await fetch(`/api/overview?${rangeQuery()}`)).json(); }
   catch (e) { app.innerHTML = `<div class="banner"><h2>Backend unreachable</h2><div class="muted">${e}</div></div>`; return; }
   $('#demoBadge').style.display = data.demo ? '' : 'none';
   if (!data.available) return renderNotAuthed(app, data);
@@ -236,7 +242,7 @@ function render(app, d) {
     acwrTile(acwr),
     hrvTile(hrv),
     tile('Fitness (CTL)', last.ctl ?? '–', null, 'load'),
-    tile('Volume', d.summary?.total_km ?? '–', null, `km · ${state.days}d`),
+    tile('Volume', d.summary?.total_km ?? '–', null, `km · ${spanDays()}d`),
   ]));
 
   // training load chart — series toggle via the legend
@@ -657,10 +663,38 @@ function tagFor(sev, label) { return h('div', { class: 'tag ' + sev }, [iconFor(
 function iconFor(sev) { return ({ good: '✅', warning: '⚠️', caution: '⚠️', serious: '🔺', critical: '⛔', info: 'ℹ️' })[sev] || 'ℹ️'; }
 
 // ---------- wiring ----------
+// Preset buttons: reset to a days-from-today window and mirror it in the date inputs.
 $('#rangeSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   [...e.currentTarget.children].forEach(x => x.classList.remove('active')); b.classList.add('active');
-  state.days = +b.dataset.days; load();
+  $('#applyRange').classList.remove('active');
+  state.days = +b.dataset.days; state.start = null; state.end = null;
+  const end = new Date(), start = new Date(); start.setDate(end.getDate() - state.days);
+  $('#startDate').value = isoDay(start); $('#endDate').value = isoDay(end);
+  load();
 });
+
+// Custom range: apply the two date inputs and deselect the presets.
+function applyRange() {
+  const s = $('#startDate').value, en = $('#endDate').value;
+  if (!s) { $('#startDate').focus(); return; }
+  if (en && en < s) { $('#endDate').focus(); return; }
+  state.start = s; state.end = en || null;
+  [...$('#rangeSeg').children].forEach(x => x.classList.remove('active'));
+  $('#applyRange').classList.add('active');
+  load();
+}
+$('#applyRange').addEventListener('click', applyRange);
+['#startDate', '#endDate'].forEach(sel =>
+  $(sel).addEventListener('keydown', e => { if (e.key === 'Enter') applyRange(); }));
+
 $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); load(); });
+
+// Seed the date inputs to the default preset window and cap them at today.
+(function initRange() {
+  const today = isoDay(new Date());
+  const start = new Date(); start.setDate(start.getDate() - state.days);
+  for (const sel of ['#startDate', '#endDate']) $(sel).max = today;
+  $('#startDate').value = isoDay(start); $('#endDate').value = today;
+})();
 load();

@@ -25,6 +25,12 @@
           <button data-days="90" class="active">90d</button>
           <button data-days="365">1y</button>
         </div>
+        <div class="daterange" id="dateRange">
+          <input type="date" id="startDate" aria-label="From date" title="From" />
+          <span class="dash">–</span>
+          <input type="date" id="endDate" aria-label="To date" title="To" />
+          <button class="btn" id="applyRange" title="Apply date range">Apply</button>
+        </div>
         <button class="btn" id="refreshBtn" title="Clear cache & reload">↻ Refresh</button>
       </div>
     </header>

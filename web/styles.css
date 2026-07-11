@@ -94,6 +94,17 @@ header.top {
   font-family: inherit;
 }
 .btn:hover { color: var(--text-primary); }
+.btn.active { background: var(--fitness); color: #fff; border-color: transparent; }
+
+.daterange { display: inline-flex; gap: 4px; align-items: center; }
+.daterange input[type="date"] {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text-secondary); padding: 5px 8px; font-size: 13px; font-family: inherit;
+  cursor: pointer; color-scheme: light dark;
+}
+.daterange input[type="date"]:focus { outline: none; border-color: var(--fitness); color: var(--text-primary); }
+.daterange .dash { color: var(--text-secondary); font-size: 13px; }
+@media (max-width: 720px){ .daterange .dash{ display:none; } .daterange{ flex-wrap:wrap; } }
 
 /* banner */
 .banner {

@@ -87,14 +87,33 @@ async def status():
 
 
 @app.get("/api/overview")
-async def overview(days: int = 90):
+async def overview(days: int = 90, start: str | None = None, end: str | None = None):
     g: GarminData = app.state.gd
     if not g.available:
         return JSONResponse({"available": False, "demo": is_demo(),
                              "error": g.status_error}, status_code=200)
-    today = date.today()
-    start = today - timedelta(days=days)
-    runs = await g.runs_between(start, today)
+    real_today = date.today()
+    # A custom [start, end] range overrides the `days` preset. Everything downstream
+    # is expressed as (anchor, days-back-from-anchor), so we anchor on `end` and derive
+    # the span. Without an explicit start we keep the original days-from-today behaviour.
+    try:
+        if start:
+            start_d = date.fromisoformat(start)
+            anchor = date.fromisoformat(end) if end else real_today
+            if anchor < start_d:
+                start_d, anchor = anchor, start_d
+            days = max((anchor - start_d).days, 1)
+        else:
+            anchor = real_today
+            start_d = anchor - timedelta(days=days)
+    except ValueError:
+        return JSONResponse({"available": True, "demo": is_demo(),
+                             "error": "Invalid start/end date."}, status_code=400)
+    # Only snapshot today's fitness into history when viewing the live window; a
+    # historical range must not write past-dated points.
+    is_current = anchor >= real_today
+    today = anchor  # local alias: the rest of this handler works off the window end
+    runs = await g.runs_between(start_d, today)
     hrmax = metrics.hr_max(runs)
 
     ts = await _daily_with_fallback(g.training_status, today)
@@ -112,7 +131,7 @@ async def overview(days: int = 90):
 
     recovery = await _recovery(g, today)
     race = await g.race_predictions()
-    fitness_trend = _fitness_trend(app, g, today, days, race)
+    fitness_trend = _fitness_trend(app, g, today, days, race, record=is_current)
 
     # Model race times from the athlete's own runs over a stable window (not the
     # selected chart range), so predictions don't vanish on a 7-day view.
@@ -149,7 +168,8 @@ async def overview(days: int = 90):
     return ov
 
 
-def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: Any) -> dict:
+def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: Any,
+                   record: bool = True) -> dict:
     """Accumulated VO2max + race-prediction trajectory (see history.py).
 
     In demo mode we synthesize it; with real data we snapshot today, read the stored
@@ -157,10 +177,11 @@ def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: An
     """
     if is_demo():
         return demo.fitness_trend(today, days)
-    try:
-        history.record_today(today, None, race if isinstance(race, dict) else None)
-    except Exception:  # noqa: BLE001
-        pass
+    if record:
+        try:
+            history.record_today(today, None, race if isinstance(race, dict) else None)
+        except Exception:  # noqa: BLE001
+            pass
     missing = history.missing_vo2_dates(today, min(days, 120))
     if missing and not getattr(app.state, "backfilling", False):
         app.state.backfilling = True
