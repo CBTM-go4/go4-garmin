@@ -649,7 +649,9 @@ function racePredictions(myp, potential, garmin) {
 function fitnessTrend(ft) {
   if (!ft) return null;
   const vo2 = ft.vo2max || [], preds = ft.predictions || [];
-  const haveVo2 = vo2.length >= 2, havePreds = preds.length >= 2;
+  // Predicted-times trend hidden for now (sparse/flat until more history accrues).
+  const SHOW_PREDICTION_TREND = false;
+  const haveVo2 = vo2.length >= 2, havePreds = SHOW_PREDICTION_TREND && preds.length >= 2;
   if (!haveVo2 && !havePreds) {
     // Nothing to plot yet — only surface a note if a backfill is populating history.
     if (!ft.backfilling) return null;
