@@ -92,6 +92,23 @@ async def status():
 CTL_WARMUP_DAYS = 120
 
 
+def _resolve_window(days: int, start: str | None, end: str | None) -> tuple[date, date, int]:
+    """Resolve (start_date, anchor, span_days) from either a days preset or an
+    explicit [start, end] range. A custom range overrides `days`; without one we keep
+    the days-from-today behaviour. Raises ValueError on unparseable dates."""
+    real_today = date.today()
+    if start:
+        start_d = date.fromisoformat(start)
+        anchor = date.fromisoformat(end) if end else real_today
+        if anchor < start_d:
+            start_d, anchor = anchor, start_d
+        days = max((anchor - start_d).days, 1)
+    else:
+        anchor = real_today
+        start_d = anchor - timedelta(days=days)
+    return start_d, anchor, days
+
+
 @app.get("/api/overview")
 async def overview(days: int = 90, start: str | None = None, end: str | None = None):
     g: GarminData = app.state.gd
@@ -99,19 +116,8 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
         return JSONResponse({"available": False, "demo": is_demo(),
                              "error": g.status_error}, status_code=200)
     real_today = date.today()
-    # A custom [start, end] range overrides the `days` preset. Everything downstream
-    # is expressed as (anchor, days-back-from-anchor), so we anchor on `end` and derive
-    # the span. Without an explicit start we keep the original days-from-today behaviour.
     try:
-        if start:
-            start_d = date.fromisoformat(start)
-            anchor = date.fromisoformat(end) if end else real_today
-            if anchor < start_d:
-                start_d, anchor = anchor, start_d
-            days = max((anchor - start_d).days, 1)
-        else:
-            anchor = real_today
-            start_d = anchor - timedelta(days=days)
+        start_d, anchor, days = _resolve_window(days, start, end)
     except ValueError:
         return JSONResponse({"available": True, "demo": is_demo(),
                              "error": "Invalid start/end date."}, status_code=400)
@@ -178,6 +184,36 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
     }
     ov["coach"] = coach.build(ov)
     return ov
+
+
+@app.get("/api/compare")
+async def compare(days: int = 90, start: str | None = None, end: str | None = None):
+    """Block-vs-block summary: the selected window against the equal-length window
+    immediately before it. Window-local metrics only (no EMA warm-up needed)."""
+    g: GarminData = app.state.gd
+    if not g.available:
+        return JSONResponse({"available": False, "demo": is_demo(),
+                             "error": g.status_error}, status_code=200)
+    try:
+        start_d, anchor, span = _resolve_window(days, start, end)
+    except ValueError:
+        return JSONResponse({"available": True, "demo": is_demo(),
+                             "error": "Invalid start/end date."}, status_code=400)
+    # Previous block: same length, ending the day before the current one starts.
+    prev_end = start_d - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=span)
+    cur_runs = await g.runs_between(start_d, anchor)
+    prev_runs = await g.runs_between(prev_start, prev_end)
+    hrmax = metrics.hr_max(cur_runs + prev_runs)
+    return {
+        "available": True,
+        "demo": is_demo(),
+        "span_days": span,
+        "current": {"start": start_d.isoformat(), "end": anchor.isoformat(),
+                    **metrics.period_summary(cur_runs, hrmax)},
+        "previous": {"start": prev_start.isoformat(), "end": prev_end.isoformat(),
+                     **metrics.period_summary(prev_runs, hrmax)},
+    }
 
 
 def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, race: Any,

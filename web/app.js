@@ -2,7 +2,7 @@
 const SVGNS = 'http://www.w3.org/2000/svg';
 const $ = (s, r = document) => r.querySelector(s);
 const tt = $('#tt');
-let state = { days: 90, start: null, end: null };
+let state = { days: 90, start: null, end: null, compare: false };
 // local-timezone-safe YYYY-MM-DD (toISOString would shift by the UTC offset)
 const isoDay = d => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
 // build the /api/overview query from the active preset OR custom range
@@ -115,6 +115,25 @@ function lineChart(points, series, opts = {}) {
     showTip(`<div class="d">${new Date(points[i].label).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>${rows}`, ev.clientX, ev.clientY);
   });
   hit.addEventListener('mouseleave', () => { hideTip(); rule.setAttribute('opacity', 0); dots.forEach(d => d.setAttribute('opacity', 0)); });
+
+  // drag-to-select: brush across the chart to set the date range to that span
+  if (opts.onBrush) {
+    hit.style.cursor = 'crosshair';
+    const idxAt = ev => {
+      const rect = s.getBoundingClientRect(); const px = (ev.clientX - rect.left) / rect.width * W;
+      const i = Math.round((px - P.l) / ((W - P.l - P.r) / Math.max(1, points.length - 1)));
+      return Math.max(0, Math.min(points.length - 1, i));
+    };
+    const sel = svg('rect', { y: P.t, height: H - P.t - P.b, class: 'brush-sel', 'pointer-events': 'none', opacity: 0 });
+    s.append(sel);
+    let i0 = null;
+    const paint = (a, b) => { const x1 = xs[Math.min(a, b)], x2 = xs[Math.max(a, b)]; sel.setAttribute('x', x1); sel.setAttribute('width', Math.max(1, x2 - x1)); sel.setAttribute('opacity', 1); };
+    const clear = () => { i0 = null; sel.setAttribute('opacity', 0); };
+    hit.addEventListener('mousedown', ev => { i0 = idxAt(ev); paint(i0, i0); ev.preventDefault(); });
+    hit.addEventListener('mousemove', ev => { if (i0 != null) paint(i0, idxAt(ev)); });
+    hit.addEventListener('mouseup', ev => { if (i0 == null) return; const a = Math.min(i0, idxAt(ev)), b = Math.max(i0, idxAt(ev)); clear(); if (b - a >= 1) opts.onBrush(points[a].label, points[b].label); });
+    hit.addEventListener('mouseleave', () => { if (i0 != null) clear(); });
+  }
   return s;
 }
 
@@ -192,6 +211,65 @@ async function load() {
   $('#demoBadge').style.display = data.demo ? '' : 'none';
   if (!data.available) return renderNotAuthed(app, data);
   render(app, data);
+  if (state.compare) loadCompare(app);
+}
+
+// Fetch the previous-period summary and inject a comparison card below the range bar.
+async function loadCompare(app) {
+  const card = h('div', { class: 'card', style: 'margin-bottom:16px' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Period Comparison'), h('span', { class: 'hint' }, 'loading…')]),
+  ]);
+  const anchorEl = app.querySelector('.rangebar');
+  anchorEl ? anchorEl.after(card) : app.prepend(card);
+  let cmp;
+  try { cmp = await (await fetch(`/api/compare?${rangeQuery()}`)).json(); }
+  catch { card.remove(); return; }
+  if (!cmp || !cmp.available) { card.remove(); return; }
+  renderCompare(card, cmp);
+}
+
+function renderCompare(card, cmp) {
+  const cur = cmp.current, prev = cmp.previous, n = cmp.span_days;
+  card.innerHTML = '';
+  card.append(h('div', { class: 'chart-title' }, [
+    h('h3', {}, 'Period Comparison'),
+    h('span', { class: 'hint' }, `${n} days vs previous ${n} days`),
+  ]));
+  const rows = [
+    { key: 'km', label: 'Volume', unit: ' km', better: 'up' },
+    { key: 'runs', label: 'Runs', unit: '', better: 'up' },
+    { key: 'hours', label: 'Time', unit: ' h', better: 'up' },
+    { key: 'load', label: 'Load', unit: '', better: 'up' },
+    { key: 'avg_pace_s_per_km', label: 'Avg pace', pace: true, better: 'down' },
+    { key: 'easy_pct', label: 'Easy %', unit: '%', better: 'none' },
+    { key: 'hard_pct', label: 'Hard %', unit: '%', better: 'none' },
+  ];
+  const fmt = (v, r) => v == null ? '–' : (r.pace ? fmtPace(v) : `${v}${r.unit || ''}`);
+  const grid = h('div', { class: 'compare-grid' });
+  ['', 'This', 'Previous', 'Change'].forEach(t => grid.append(h('div', { class: 'ch head' }, t)));
+  rows.forEach(r => {
+    grid.append(h('div', { class: 'ch metric' }, r.label));
+    grid.append(h('div', { class: 'ch' }, fmt(cur[r.key], r)));
+    grid.append(h('div', { class: 'ch prev' }, fmt(prev[r.key], r)));
+    grid.append(deltaCell(cur[r.key], prev[r.key], r));
+  });
+  card.append(grid);
+}
+
+function deltaCell(cv, pv, r) {
+  if (cv == null || pv == null) return h('div', { class: 'ch delta' }, '–');
+  const diff = cv - pv;
+  const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '–';
+  let cls = 'ch delta';
+  if (r.better !== 'none' && diff !== 0) {
+    const better = (r.better === 'up' && diff > 0) || (r.better === 'down' && diff < 0);
+    cls += better ? ' good' : ' bad';
+  }
+  const a = Math.abs(diff);
+  const mag = r.pace ? `${Math.floor(a / 60)}:${String(Math.round(a % 60)).padStart(2, '0')}`
+                     : `${Math.round(a * 10) / 10}${r.unit || ''}`;
+  const pct = pv ? ` (${Math.round(a / Math.abs(pv) * 100)}%)` : '';
+  return h('div', { class: cls }, `${arrow} ${mag}${pct}`);
 }
 
 function renderNotAuthed(app, data) {
@@ -266,14 +344,15 @@ function render(app, d) {
   ];
   const loadVisible = new Set(loadSeries.map(se => se.key));
   const loadCard = h('div', { class: 'card', style: 'margin-bottom:16px' }, [
-    h('div', { class: 'chart-title' }, [h('h3', {}, 'Training Load & Form'), h('span', { class: 'hint' }, 'click legend to toggle')]),
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Training Load & Form'), h('span', { class: 'hint' }, 'drag to zoom · click legend to toggle')]),
   ]);
   const loadHolder = h('div');
+  const brushToRange = (startLabel, endLabel) => { state.start = startLabel; state.end = endLabel; apply(); };
   const drawLoad = () => {
     loadHolder.innerHTML = '';
     const vis = loadSeries.filter(se => loadVisible.has(se.key));
     loadHolder.append(lineChart(pts, vis.map(se => ({ key: se.key, name: se.short, color: se.color })),
-      { baseZero: loadVisible.has('tsb'), height: 240 }));
+      { baseZero: loadVisible.has('tsb'), height: 240, onBrush: brushToRange }));
   };
   loadCard.append(toggleLegend(loadSeries, loadVisible, drawLoad));
   loadCard.append(loadHolder);
@@ -680,7 +759,7 @@ function syncUrl() {
   const q = state.start
     ? `?start=${state.start}` + (state.end ? `&end=${state.end}` : '')
     : `?days=${state.days}`;
-  history.replaceState(null, '', location.pathname + q);
+  history.replaceState(null, '', location.pathname + q + (state.compare ? '&compare=1' : ''));
 }
 
 // Reflect the current state into the controls (active preset + date inputs).
@@ -688,6 +767,7 @@ function reflectControls() {
   [...$('#rangeSeg').children].forEach(b =>
     b.classList.toggle('active', !state.start && +b.dataset.days === state.days));
   $('#applyRange').classList.toggle('active', !!state.start);
+  $('#compareBtn').classList.toggle('active', !!state.compare);
   const end = state.end ? new Date(state.end + 'T00:00:00') : new Date();
   const start = state.start ? new Date(state.start + 'T00:00:00')
                             : new Date(end.getTime() - state.days * 86400000);
@@ -716,13 +796,17 @@ $('#applyRange').addEventListener('click', applyRange);
 ['#startDate', '#endDate'].forEach(sel =>
   $(sel).addEventListener('keydown', e => { if (e.key === 'Enter') applyRange(); }));
 
+// Compare toggle: show/hide the period-vs-period card.
+$('#compareBtn').addEventListener('click', () => { state.compare = !state.compare; apply(); });
+
 $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); load(); });
 
-// Restore the range from the URL, cap the date inputs at today, then load.
+// Restore state from the URL, cap the date inputs at today, then load.
 (function init() {
   const p = new URLSearchParams(location.search);
   if (p.get('start')) { state.start = p.get('start'); state.end = p.get('end') || null; }
   else if (p.get('days')) { state.days = +p.get('days') || 90; }
+  state.compare = p.get('compare') === '1';
   for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
   reflectControls();
   load();

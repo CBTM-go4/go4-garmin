@@ -222,6 +222,24 @@ def test_body_battery_norm_sorts_by_date():
     assert m.body_battery_norm(None) == []
 
 
+def test_period_summary():
+    runs = [run(TODAY, km=10, minutes=50, avg_hr=150, max_hr=190),
+            run(TODAY - timedelta(days=1), km=5, minutes=30, avg_hr=140, max_hr=190)]
+    p = m.period_summary(runs, 190)
+    assert p["runs"] == 2
+    assert p["km"] == 15.0
+    assert p["hours"] == 1.3  # 80 min, rounded to 1 dp
+    assert p["avg_pace_s_per_km"] == round((50 + 30) * 60 / 15)  # total_s / total_km
+    assert p["load"] == pytest.approx(sum(m.run_load(r, 190) for r in runs), abs=0.1)
+    assert 0 <= p["easy_pct"] <= 100 and 0 <= p["hard_pct"] <= 100
+
+
+def test_period_summary_empty():
+    p = m.period_summary([], 190)
+    assert p == {"runs": 0, "km": 0.0, "hours": 0.0, "load": 0.0,
+                 "avg_pace_s_per_km": None, "easy_pct": 0.0, "hard_pct": 0.0}
+
+
 def test_summarize_runs():
     runs = [run(TODAY, km=10, minutes=60), run(TODAY, km=5, minutes=30)]
     s = m.summarize_runs(runs)

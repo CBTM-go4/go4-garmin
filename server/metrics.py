@@ -475,3 +475,25 @@ def summarize_runs(runs: list[dict]) -> dict:
     total_s = sum((r.get("duration_seconds") or 0) for r in runs)
     return {"count": len(runs), "total_km": round(total_km, 1),
             "total_hours": round(total_s / 3600, 1)}
+
+
+def period_summary(runs: list[dict], hrmax: int) -> dict:
+    """Window-local block summary for period-vs-period comparison.
+
+    Only quantities computable from the window's own runs (no EMA warm-up), so a
+    previous block can be summarised in isolation and diffed against the current one.
+    """
+    total_km = sum((r.get("distance_meters") or 0) for r in runs) / 1000
+    total_s = sum((r.get("duration_seconds") or 0) for r in runs)
+    load = sum(run_load(r, hrmax) for r in runs)
+    zones = approx_weekly_zones(runs, hrmax)
+    avg_pace = round(total_s / total_km) if total_km else None  # seconds per km
+    return {
+        "runs": len(runs),
+        "km": round(total_km, 1),
+        "hours": round(total_s / 3600, 1),
+        "load": round(load, 1),
+        "avg_pace_s_per_km": avg_pace,
+        "easy_pct": zones["easy_pct"],
+        "hard_pct": zones["hard_pct"],
+    }

@@ -108,6 +108,17 @@ header.top {
 
 .rangebar { color: var(--text-secondary); font-size: 13px; margin: 2px 2px 14px; letter-spacing: .01em; }
 
+/* drag-to-select brush overlay on the load chart */
+.brush-sel { fill: var(--fitness); fill-opacity: .15; stroke: var(--fitness); stroke-opacity: .5; }
+
+/* period comparison card */
+.compare-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1.3fr; gap: 4px 14px; margin-top: 10px; font-size: 14px; }
+.compare-grid .ch { padding: 5px 0; font-variant-numeric: tabular-nums; }
+.compare-grid .ch.head { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.compare-grid .ch.metric, .compare-grid .ch.prev { color: var(--text-secondary); }
+.compare-grid .ch.delta.good { color: var(--good); }
+.compare-grid .ch.delta.bad { color: var(--fatigue); }
+
 /* banner */
 .banner {
   border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px;
