@@ -112,6 +112,16 @@ Set `GARMIN_COACH_HR_MAX` / `GARMIN_COACH_HR_REST` in `.env` for accurate load &
 zones (otherwise HR max is inferred from your data, rest defaults to 48). See
 [`.env.example`](.env.example).
 
+## Development
+
+The training-science math in `server/metrics.py` (TRIMP → CTL/ATL/TSB, ACWR,
+VDOT/Riegel race prediction, HR zones, aerobic decoupling) is covered by an offline
+test suite — no Garmin account or MCP needed:
+
+```bash
+uv run pytest
+```
+
 ## Notes & limitations
 
 - The **Intensity Mix** is *estimated from each run's average HR* (cheap, no extra
