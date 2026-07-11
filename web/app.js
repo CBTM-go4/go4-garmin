@@ -208,8 +208,20 @@ function renderNotAuthed(app, data) {
   ]));
 }
 
+// Human label for the window actually being shown, e.g. "15 Jun – 11 Jul · 26 days".
+function rangeSummary(d) {
+  const end = d.generated_for ? new Date(d.generated_for + 'T00:00:00') : new Date();
+  const n = spanDays();
+  const start = state.start ? new Date(state.start + 'T00:00:00')
+                            : new Date(end.getTime() - n * 86400000);
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const f = (dt, y) => dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(y ? { year: 'numeric' } : {}) });
+  return `${f(start, !sameYear)} – ${f(end, true)} · ${n} days`;
+}
+
 function render(app, d) {
   app.innerHTML = '';
+  app.append(h('div', { class: 'rangebar' }, rangeSummary(d)));
   const s = d.load_series || [], last = s[s.length - 1] || {};
   const c = d.coach || {};
   const ts = d.training_status || {}, hrv = d.hrv || {};
@@ -663,26 +675,42 @@ function tagFor(sev, label) { return h('div', { class: 'tag ' + sev }, [iconFor(
 function iconFor(sev) { return ({ good: '✅', warning: '⚠️', caution: '⚠️', serious: '🔺', critical: '⛔', info: 'ℹ️' })[sev] || 'ℹ️'; }
 
 // ---------- wiring ----------
-// Preset buttons: reset to a days-from-today window and mirror it in the date inputs.
+// Keep the range in the URL so a refresh preserves it and the view is shareable.
+function syncUrl() {
+  const q = state.start
+    ? `?start=${state.start}` + (state.end ? `&end=${state.end}` : '')
+    : `?days=${state.days}`;
+  history.replaceState(null, '', location.pathname + q);
+}
+
+// Reflect the current state into the controls (active preset + date inputs).
+function reflectControls() {
+  [...$('#rangeSeg').children].forEach(b =>
+    b.classList.toggle('active', !state.start && +b.dataset.days === state.days));
+  $('#applyRange').classList.toggle('active', !!state.start);
+  const end = state.end ? new Date(state.end + 'T00:00:00') : new Date();
+  const start = state.start ? new Date(state.start + 'T00:00:00')
+                            : new Date(end.getTime() - state.days * 86400000);
+  $('#startDate').value = state.start || isoDay(start);
+  $('#endDate').value = state.end || isoDay(end);
+}
+
+function apply() { reflectControls(); syncUrl(); load(); }
+
+// Preset buttons: a days-from-today window.
 $('#rangeSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  [...e.currentTarget.children].forEach(x => x.classList.remove('active')); b.classList.add('active');
-  $('#applyRange').classList.remove('active');
   state.days = +b.dataset.days; state.start = null; state.end = null;
-  const end = new Date(), start = new Date(); start.setDate(end.getDate() - state.days);
-  $('#startDate').value = isoDay(start); $('#endDate').value = isoDay(end);
-  load();
+  apply();
 });
 
-// Custom range: apply the two date inputs and deselect the presets.
+// Custom range: apply the two date inputs.
 function applyRange() {
   const s = $('#startDate').value, en = $('#endDate').value;
   if (!s) { $('#startDate').focus(); return; }
   if (en && en < s) { $('#endDate').focus(); return; }
   state.start = s; state.end = en || null;
-  [...$('#rangeSeg').children].forEach(x => x.classList.remove('active'));
-  $('#applyRange').classList.add('active');
-  load();
+  apply();
 }
 $('#applyRange').addEventListener('click', applyRange);
 ['#startDate', '#endDate'].forEach(sel =>
@@ -690,11 +718,12 @@ $('#applyRange').addEventListener('click', applyRange);
 
 $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); load(); });
 
-// Seed the date inputs to the default preset window and cap them at today.
-(function initRange() {
-  const today = isoDay(new Date());
-  const start = new Date(); start.setDate(start.getDate() - state.days);
-  for (const sel of ['#startDate', '#endDate']) $(sel).max = today;
-  $('#startDate').value = isoDay(start); $('#endDate').value = today;
+// Restore the range from the URL, cap the date inputs at today, then load.
+(function init() {
+  const p = new URLSearchParams(location.search);
+  if (p.get('start')) { state.start = p.get('start'); state.end = p.get('end') || null; }
+  else if (p.get('days')) { state.days = +p.get('days') || 90; }
+  for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
+  reflectControls();
+  load();
 })();
-load();

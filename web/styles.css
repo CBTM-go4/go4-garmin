@@ -106,6 +106,8 @@ header.top {
 .daterange .dash { color: var(--text-secondary); font-size: 13px; }
 @media (max-width: 720px){ .daterange .dash{ display:none; } .daterange{ flex-wrap:wrap; } }
 
+.rangebar { color: var(--text-secondary); font-size: 13px; margin: 2px 2px 14px; letter-spacing: .01em; }
+
 /* banner */
 .banner {
   border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px;
