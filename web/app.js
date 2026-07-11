@@ -43,7 +43,7 @@ const HELP = {
   'Race Predictions': 'Three estimates side by side. Realistic = Daniels VDOT from your best actual effort (only what you’ve demonstrated). HR-based = your pace-vs-HR profile read at threshold HR — reliable only if your faster runs are your higher-HR ones (heat/hills distort it). Garmin = its VO₂max estimate (tends optimistic). Longer distances assume you’ve done the endurance work.',
   'Sleep': 'Last night’s sleep score and stage breakdown (deep / REM / light), plus your recent nightly duration. Deep and REM drive physical and mental recovery; aim for consistency.',
   'Body Battery': 'Garmin’s daily energy model. “Charged” is how much you recovered (mostly overnight), “drained” is how much activity and stress spent — net positive days leave you fresher.',
-  'Fitness Trend': 'Your fitness trajectory over time — VO₂max (Garmin computes it only on some run days, so points are sparse) and predicted race times as a % of their earliest value (lower = faster). Direction over weeks matters more than any single point.',
+  'Fitness Trend': 'Your fitness trajectory over time — VO₂max (Garmin computes it only on some run days, so points are sparse) and predicted race times shown as % faster/slower than the earliest point (up = faster; hover for the actual time). Direction over weeks matters more than any single point.',
 };
 
 function addHelp(el, text) {
@@ -71,13 +71,14 @@ function lineChart(points, series, opts = {}) {
   if (vmin === vmax) vmax += 1;
   const pad = (vmax - vmin) * 0.08; vmax += pad; vmin -= pad;
   const y = v => P.t + (vmax - v) / (vmax - vmin) * (H - P.t - P.b);
+  const fmtV = v => opts.decimals != null ? v.toFixed(opts.decimals) : Math.round(v);
 
   // gridlines + y ticks
   const ticks = 4;
   for (let i = 0; i <= ticks; i++) {
     const v = vmin + (vmax - vmin) * i / ticks, yy = y(v);
     s.append(svg('line', { x1: P.l, x2: W - P.r, y1: yy, y2: yy, class: 'grid-line' }));
-    s.append(Object.assign(svg('text', { x: P.l - 6, y: yy + 3, 'text-anchor': 'end', class: 'axis-label' }), { textContent: Math.round(v) }));
+    s.append(Object.assign(svg('text', { x: P.l - 6, y: yy + 3, 'text-anchor': 'end', class: 'axis-label' }), { textContent: fmtV(v) }));
   }
   if (vmin < 0 && vmax > 0) s.append(svg('line', { x1: P.l, x2: W - P.r, y1: y(0), y2: y(0), class: 'zero-line' }));
 
@@ -96,7 +97,7 @@ function lineChart(points, series, opts = {}) {
     const ends = series.map(se => ({ v: points[points.length - 1].values[se.key], color: se.color }))
       .filter(e => e.v != null).map(e => ({ ...e, y: y(e.v) })).sort((a, b) => a.y - b.y);
     for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 12) ends[i].y = ends[i - 1].y + 12;
-    ends.forEach(e => s.append(Object.assign(svg('text', { x: W - P.r + 6, y: e.y + 3, class: 'axis-label', fill: css(e.color), 'font-weight': 600 }), { textContent: Math.round(e.v) })));
+    ends.forEach(e => s.append(Object.assign(svg('text', { x: W - P.r + 6, y: e.y + 3, class: 'axis-label', fill: css(e.color), 'font-weight': 600 }), { textContent: fmtV(e.v) })));
   }
 
   // hover layer
@@ -111,7 +112,7 @@ function lineChart(points, series, opts = {}) {
     i = Math.max(0, Math.min(points.length - 1, i));
     rule.setAttribute('x1', xs[i]); rule.setAttribute('x2', xs[i]); rule.setAttribute('opacity', 1);
     let rows = '';
-    series.forEach((se, k) => { const v = points[i].values[se.key]; if (v == null) { dots[k].setAttribute('opacity', 0); return; } dots[k].setAttribute('cx', xs[i]); dots[k].setAttribute('cy', y(v)); dots[k].setAttribute('opacity', 1); rows += `<div class="r"><span style="color:${css(se.color)}">${se.name}</span><b>${Math.round(v)}${se.unit || ''}</b></div>`; });
+    series.forEach((se, k) => { const v = points[i].values[se.key]; if (v == null) { dots[k].setAttribute('opacity', 0); return; } dots[k].setAttribute('cx', xs[i]); dots[k].setAttribute('cy', y(v)); dots[k].setAttribute('opacity', 1); const disp = opts.tipFormat ? opts.tipFormat(se, v, points[i]) : `${fmtV(v)}${se.unit || ''}`; rows += `<div class="r"><span style="color:${css(se.color)}">${se.name}</span><b>${disp}</b></div>`; });
     showTip(`<div class="d">${new Date(points[i].label).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>${rows}`, ev.clientX, ev.clientY);
   });
   hit.addEventListener('mouseleave', () => { hideTip(); rule.setAttribute('opacity', 0); dots.forEach(d => d.setAttribute('opacity', 0)); });
@@ -670,8 +671,9 @@ function fitnessTrend(ft) {
   }
 
   if (havePreds) {
-    // Different distances live on wildly different scales, so normalize each to a
-    // % of its earliest value. Lower = faster than baseline.
+    // Distances live on wildly different scales, so plot each as % faster/slower than
+    // its baseline (the earliest point). Signed so up = faster/fitter — matching every
+    // other trend here — and the tooltip shows the actual predicted time.
     const dists = [
       { key: 'p5k', name: '5K', color: '--fitness' },
       { key: 'p10k', name: '10K', color: '--form' },
@@ -682,12 +684,20 @@ function fitnessTrend(ft) {
     dists.forEach(dd => base[dd.key] = preds[0][dd.key]);
     const pts = preds.map(p => ({
       label: p.date,
+      raw: Object.fromEntries(dists.map(dd => [dd.key, p[dd.key]])),
+      // (base - current) / base: a faster (smaller) time is a positive % improvement.
       values: Object.fromEntries(dists.map(dd =>
-        [dd.key, p[dd.key] != null && base[dd.key] ? Math.round(1000 * p[dd.key] / base[dd.key]) / 10 : null])),
+        [dd.key, p[dd.key] != null && base[dd.key] ? Math.round(1000 * (base[dd.key] - p[dd.key]) / base[dd.key]) / 10 : null])),
     }));
-    card.append(h('div', { class: 'hint', style: 'margin-top:14px' }, 'Predicted race times · % of earliest (lower = faster)'));
+    const tipFormat = (se, v, p) => {
+      const secs = p.raw?.[se.key];
+      const sign = v > 0 ? '+' : '';
+      return `${secs ? fmtDur(secs) : '–'} (${sign}${v.toFixed(1)}%)`;
+    };
+    card.append(h('div', { class: 'hint', style: 'margin-top:14px' }, 'Predicted race times · % faster than baseline (up = faster) — hover for the time'));
     card.append(legend(dists.map(dd => ({ name: dd.name, color: dd.color }))));
-    card.append(lineChart(pts, dists.map(dd => ({ ...dd, unit: '%' })), { height: 170, endLabels: true }));
+    card.append(lineChart(pts, dists.map(dd => ({ ...dd })),
+      { height: 170, endLabels: true, decimals: 1, baseZero: true, tipFormat }));
   }
   return card;
 }
