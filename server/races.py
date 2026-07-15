@@ -1,65 +1,52 @@
-"""The athlete's goal races — the season's targets, in one place.
+"""The athlete's goal races — the season's targets.
 
-Not Garmin data: these are chosen objectives that drive the training plan, so they
-live as explicit config rather than anything derived. Ordered by date; the one marked
-priority "A" is the season's A-race that everything builds toward.
+Personal race goals are NOT committed to the repo. They live in ``data/races.json``
+(gitignored) and are loaded at request time. This module ships an empty placeholder so
+a fresh clone runs cleanly with no personal data; drop in a ``data/races.json`` to
+populate the Goal Races view.
+
+Each race is a dict:
+    {
+      "name": str,
+      "date": "YYYY-MM-DD" | null,   # null = tentative (no countdown, sorts last)
+      "distance_km": number | null,
+      "surface": "road" | "trail" | null,
+      "location": str,
+      "role": str,                    # short label, e.g. "Qualifier", "Goal"
+      "priority": "A" | "prep" | "tentative",   # "A" = the season's A-race
+      "note": str,                    # optional badge, e.g. "100th · Down run"
+      "focus": str,
+    }
 """
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 
-GOAL_RACES: list[dict] = [
-    {
-        "name": "Nelson Mandela Marathon",
-        "date": "2026-10-18",
-        "distance_km": 42.2,
-        "surface": "road",
-        "location": "Cape Town",
-        "role": "Qualifier",
-        "priority": "prep",
-        "focus": "First marathon back — run/walk to finish. Doubles as the Comrades qualifier.",
-    },
-    {
-        "name": "TM35 · Ultra-Trail Cape Town",
-        "date": "2026-11-21",
-        "distance_km": 35,
-        "surface": "trail",
-        "location": "Table Mountain NP",
-        "role": "Prep",
-        "priority": "prep",
-        "focus": "Steep, technical descents — ideal down-run conditioning for the quads.",
-    },
-    {
-        "name": "Comrades Marathon",
-        "date": "2027-06-13",
-        "distance_km": 89,
-        "surface": "road",
-        "location": "PMB → Durban",
-        "role": "Goal",
-        "priority": "A",
-        "note": "100th · Down run",
-        "focus": "The 100th running — a down run into Durban. The whole season builds to this.",
-    },
-    {
-        # Tentative — date, distance and event all still open. Kept on the board so it
-        # stays in view while it firms up. date=None ⇒ no countdown, sorts last.
-        "name": "Ultra in Europe",
-        "date": None,
-        "distance_km": None,
-        "surface": None,
-        "location": "Europe",
-        "role": "Maybe",
-        "priority": "tentative",
-        "focus": "A possible overseas ultra — event, distance and date still to be decided.",
-    },
-]
+_RACES_FILE = Path(__file__).resolve().parent.parent / "data" / "races.json"
+
+# Placeholder — no personal data. Real races load from data/races.json (gitignored).
+_PLACEHOLDER: list[dict] = []
+
+
+def _load() -> list[dict]:
+    """Load goal races from the local (gitignored) config, or the placeholder."""
+    try:
+        if _RACES_FILE.exists():
+            data = json.loads(_RACES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception:  # noqa: BLE001 — a bad/edited config must never crash the API
+        pass
+    return _PLACEHOLDER
 
 
 def with_countdown(today: date) -> list[dict]:
     """Goal races annotated with days remaining, soonest first; undated (tentative)
     races carry days_to=None and sort to the end."""
     out = []
-    for r in GOAL_RACES:
+    for r in _load():
         days = (date.fromisoformat(r["date"]) - today).days if r.get("date") else None
         out.append({**r, "days_to": days})
     out.sort(key=lambda r: (r.get("date") is None, r.get("date") or ""))
