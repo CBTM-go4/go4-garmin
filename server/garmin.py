@@ -77,13 +77,19 @@ class GarminData:
         return value
 
     # ---- activities -------------------------------------------------------
-    async def activities_between(self, start: date, end: date) -> list[dict]:
-        """All activities in the range, following the MCP tool's pagination."""
+    async def activities_between(self, start: date, end: date, stable: bool = False) -> list[dict]:
+        """All activities in the range, following the MCP tool's pagination.
+
+        `stable=True` caches the pages with the long (immutable-data) TTL — use it for
+        ranges that end in the past and can never change (e.g. prior calendar years),
+        so a full-history sweep isn't re-fetched from Garmin every 15 minutes.
+        """
+        ttl = _STABLE_TTL if stable else _VOLATILE_TTL
         acts: list[dict] = []
         for page in range(60):  # safety cap (60 * 200 = 12k activities)
             data = await self._call(
                 "get_activities_by_date",
-                ttl=_VOLATILE_TTL,
+                ttl=ttl,
                 start_date=start.isoformat(),
                 end_date=end.isoformat(),
                 page=page,
@@ -96,8 +102,8 @@ class GarminData:
                 break
         return acts
 
-    async def runs_between(self, start: date, end: date) -> list[dict]:
-        acts = await self.activities_between(start, end)
+    async def runs_between(self, start: date, end: date, stable: bool = False) -> list[dict]:
+        acts = await self.activities_between(start, end, stable=stable)
         return [a for a in acts if (a.get("type") or "") in RUN_TYPES]
 
     async def activity(self, activity_id: int | str) -> dict | None:

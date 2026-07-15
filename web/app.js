@@ -2,7 +2,7 @@
 const SVGNS = 'http://www.w3.org/2000/svg';
 const $ = (s, r = document) => r.querySelector(s);
 const tt = $('#tt');
-let state = { days: 90, start: null, end: null, compare: false };
+let state = { days: 90, start: null, end: null, compare: false, view: 'dashboard' };
 // local-timezone-safe YYYY-MM-DD (toISOString would shift by the UTC offset)
 const isoDay = d => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
 // build the /api/overview query from the active preset OR custom range
@@ -285,6 +285,61 @@ function renderNotAuthed(app, data) {
       h('li', { html: 'Or just explore the UI now with <code>GARMIN_COACH_DEMO=1</code>.' }),
     ]),
   ]));
+}
+
+// ---------- history view (per-year totals across the whole record) ----------
+async function loadHistory() {
+  const app = $('#app');
+  app.innerHTML = '<div class="loading">Scanning your full Garmin history…<br><span class="muted" style="font-size:13px">the first load can take a few seconds</span></div>';
+  let d;
+  try { d = await (await fetch('/api/history')).json(); }
+  catch (e) { app.innerHTML = `<div class="banner"><h2>Backend unreachable</h2><div class="muted">${e}</div></div>`; return; }
+  $('#demoBadge').style.display = d.demo ? '' : 'none';
+  if (!d.available) return renderNotAuthed(app, d);
+  renderHistory(app, d);
+}
+
+function renderHistory(app, d) {
+  app.innerHTML = '';
+  const years = (d.years || []).slice().sort((a, b) => b.year - a.year);  // newest first
+  const tot = d.totals || {};
+  app.append(h('div', { class: 'rangebar' },
+    `${tot.years ?? years.length} years · ${(tot.runs ?? 0).toLocaleString()} runs · ${Math.round(tot.km ?? 0).toLocaleString()} km all-time`));
+
+  const card = h('div', { class: 'card' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Running History'), h('span', { class: 'hint' }, 'by calendar year · click a year to view it')]),
+  ]);
+  if (!years.length) {
+    card.append(h('div', { class: 'muted', style: 'padding:8px 0' }, 'No runs found in your Garmin history.'));
+    app.append(card);
+    return;
+  }
+  const maxKm = Math.max(...years.map(y => y.km), 1);
+  const t = h('table', { class: 'history' });
+  t.append(h('thead', {}, h('tr', {}, ['Year', 'Runs', 'Volume', '', 'Longest run'].map(x => h('th', {}, x)))));
+  const tb = h('tbody');
+  years.forEach(y => {
+    const lg = y.longest;
+    const bar = h('div', { class: 'volbar' }, [h('span', { style: `width:${Math.round(100 * y.km / maxKm)}%` })]);
+    const tr = h('tr', {}, [
+      h('td', {}, h('b', {}, String(y.year))),
+      h('td', {}, y.runs.toLocaleString()),
+      h('td', {}, `${Math.round(y.km).toLocaleString()} km`),
+      h('td', { class: 'barcell' }, bar),
+      h('td', { class: 'longest' }, lg
+        ? [h('b', {}, `${lg.km} km`), h('span', { class: 'muted' }, ` · ${lg.name} · ${shortDate(lg.date)}`)]
+        : '–'),
+    ]);
+    // Jump to that whole year on the dashboard.
+    tr.addEventListener('click', () => {
+      state.start = `${y.year}-01-01`; state.end = `${y.year}-12-31`;
+      switchView('dashboard');
+    });
+    tb.append(tr);
+  });
+  t.append(tb);
+  card.append(t);
+  app.append(card);
 }
 
 // Human label for the window actually being shown, e.g. "15 Jun – 11 Jul · 26 days".
@@ -767,11 +822,29 @@ function iconFor(sev) { return ({ good: '✅', warning: '⚠️', caution: '⚠�
 // ---------- wiring ----------
 // Keep the range in the URL so a refresh preserves it and the view is shareable.
 function syncUrl() {
-  const q = state.start
-    ? `?start=${state.start}` + (state.end ? `&end=${state.end}` : '')
-    : `?days=${state.days}`;
-  history.replaceState(null, '', location.pathname + q + (state.compare ? '&compare=1' : ''));
+  const parts = [];
+  if (state.view === 'history') { parts.push('view=history'); }
+  else {
+    parts.push(state.start ? `start=${state.start}` + (state.end ? `&end=${state.end}` : '') : `days=${state.days}`);
+    if (state.compare) parts.push('compare=1');
+  }
+  history.replaceState(null, '', location.pathname + '?' + parts.join('&'));
 }
+
+// Switch between the dashboard and the all-time history view. The range controls only
+// apply to the dashboard, so they're hidden on history.
+function switchView(v) {
+  state.view = v;
+  [...$('#tabs').children].forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  const onDash = v !== 'history';
+  ['#rangeSeg', '#dateRange', '#compareBtn'].forEach(sel => { $(sel).style.display = onDash ? '' : 'none'; });
+  if (onDash) { reflectControls(); syncUrl(); load(); }   // load() also injects compare
+  else { syncUrl(); loadHistory(); }
+}
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || b.classList.contains('active')) return;
+  switchView(b.dataset.view);
+});
 
 // Reflect the current state into the controls (active preset + date inputs).
 function reflectControls() {
@@ -810,7 +883,7 @@ $('#applyRange').addEventListener('click', applyRange);
 // Compare toggle: show/hide the period-vs-period card.
 $('#compareBtn').addEventListener('click', () => { state.compare = !state.compare; apply(); });
 
-$('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); load(); });
+$('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); state.view === 'history' ? loadHistory() : load(); });
 
 // Restore state from the URL, cap the date inputs at today, then load.
 (function init() {
@@ -820,5 +893,6 @@ $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refre
   state.compare = p.get('compare') === '1';
   for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
   reflectControls();
-  load();
+  if (p.get('view') === 'history') switchView('history');
+  else load();
 })();

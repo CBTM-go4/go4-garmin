@@ -108,6 +108,23 @@ header.top {
 
 .rangebar { color: var(--text-secondary); font-size: 13px; margin: 2px 2px 14px; letter-spacing: .01em; }
 
+/* view tabs */
+.tabs { display: flex; gap: 4px; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
+.tabs button {
+  background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  color: var(--text-secondary); padding: 8px 14px; font-size: 14px; font-family: inherit;
+  cursor: pointer; font-weight: 600;
+}
+.tabs button:hover { color: var(--text-primary); }
+.tabs button.active { color: var(--fitness); border-bottom-color: var(--fitness); }
+
+/* history table: volume bar + longest-run cell */
+table.history td.barcell { width: 26%; padding-left: 0; padding-right: 0; }
+.volbar { background: rgba(127,127,127,.14); border-radius: 5px; height: 10px; width: 100%; overflow: hidden; }
+.volbar span { display: block; height: 100%; background: var(--fitness); border-radius: 5px; }
+table.history td.longest { text-align: left; }
+table.history td.longest .muted { font-size: 12.5px; }
+
 /* drag-to-select brush overlay on the load chart */
 .brush-sel { fill: var(--fitness); fill-opacity: .15; stroke: var(--fitness); stroke-opacity: .5; }
 

@@ -477,6 +477,31 @@ def summarize_runs(runs: list[dict]) -> dict:
             "total_hours": round(total_s / 3600, 1)}
 
 
+def yearly_history(runs: list[dict]) -> list[dict]:
+    """Per-calendar-year running totals: run count, distance, and that year's single
+    longest run. Ordered oldest year first. Used by the History view, which spans the
+    athlete's whole Garmin record rather than a rolling window."""
+    buckets: dict[int, dict] = {}
+    for r in runs:
+        d = _run_date(r)
+        if not d:
+            continue
+        meters = r.get("distance_meters") or 0
+        if meters < 500:   # drop GPS-glitch fragments (accidental starts, lost signal)
+            continue
+        km = meters / 1000
+        b = buckets.setdefault(d.year, {"year": d.year, "runs": 0, "km": 0.0, "longest": None})
+        b["runs"] += 1
+        b["km"] += km
+        lg = b["longest"]
+        if lg is None or km > lg["km"]:
+            b["longest"] = {"km": round(km, 1), "date": d.isoformat(), "name": r.get("name") or "Run"}
+    out = sorted(buckets.values(), key=lambda x: x["year"])
+    for b in out:
+        b["km"] = round(b["km"], 1)
+    return out
+
+
 def period_summary(runs: list[dict], hrmax: int) -> dict:
     """Window-local block summary for period-vs-period comparison.
 

@@ -189,6 +189,38 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
     return ov
 
 
+# Garmin Connect launched in 2007; no account predates this. A fixed floor lets one
+# range query sweep the athlete's entire record — the pagination in runs_between walks
+# however many activities exist, and only the years with runs come back.
+HISTORY_START = date(2007, 1, 1)
+
+
+@app.get("/api/history")
+async def history_years():
+    """Per-year running totals across the athlete's whole Garmin history."""
+    g: GarminData = app.state.gd
+    if not g.available:
+        return JSONResponse({"available": False, "demo": is_demo(),
+                             "error": g.status_error}, status_code=200)
+    # Prior calendar years are immutable — fetch them once and cache hard. Only the
+    # current year is refetched at the normal cadence, so the History view is fast
+    # (only the first-ever load pays the full-sweep cost).
+    today = date.today()
+    past = await g.runs_between(HISTORY_START, date(today.year - 1, 12, 31), stable=True)
+    current = await g.runs_between(date(today.year, 1, 1), today)
+    years = metrics.yearly_history(past + current)
+    return {
+        "available": True,
+        "demo": is_demo(),
+        "years": years,
+        "totals": {
+            "years": len(years),
+            "runs": sum(y["runs"] for y in years),
+            "km": round(sum(y["km"] for y in years), 1),
+        },
+    }
+
+
 @app.get("/api/compare")
 async def compare(days: int = 90, start: str | None = None, end: str | None = None):
     """Block-vs-block summary: the selected window against the equal-length window
