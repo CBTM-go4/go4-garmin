@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cache, coach, demo, history, metrics, store
+from . import cache, coach, demo, history, metrics, races, store
 from .garmin import GarminData, is_demo
 from .mcp_client import GarminMCP
 
@@ -87,6 +87,12 @@ async def _sync_store(app: FastAPI) -> None:
         log.info("Activity store synced: %d activities written, %d total", n, store.count())
     except Exception as e:  # noqa: BLE001
         log.warning("Activity store sync failed: %s", e)
+
+
+@app.get("/api/races")
+async def goal_races():
+    """The season's goal races with live countdowns. Pure config — no Garmin needed."""
+    return {"today": date.today().isoformat(), "races": races.with_countdown(date.today())}
 
 
 @app.get("/api/status")

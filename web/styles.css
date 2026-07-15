@@ -125,6 +125,47 @@ table.history td.barcell { width: 26%; padding-left: 0; padding-right: 0; }
 table.history td.longest { text-align: left; }
 table.history td.longest .muted { font-size: 12.5px; }
 
+/* goal races */
+.race-hero {
+  display: flex; align-items: center; gap: 20px; margin-bottom: 16px;
+  background: var(--surface-1); border: 1px solid var(--border); border-left: 3px solid var(--fitness);
+  border-radius: var(--radius); padding: 20px 22px; box-shadow: var(--shadow);
+}
+.rh-count { font-size: clamp(38px, 8vw, 48px); font-weight: 800; letter-spacing: -0.02em; color: var(--fitness); line-height: 1; font-variant-numeric: tabular-nums; }
+.rh-count span { font-size: 16px; font-weight: 600; color: var(--muted); }
+.rh-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.rh-name { font-size: 19px; font-weight: 700; margin-top: 2px; }
+.rh-sub { color: var(--text-secondary); font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+.race-list { display: flex; flex-direction: column; gap: 12px; }
+.race-card {
+  display: flex; gap: 16px; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow);
+}
+.race-card.goal { border-color: var(--fitness); background: rgba(42, 120, 214, .05); }
+.race-card.past { opacity: .6; }
+.race-card.tentative { border-style: dashed; }
+.rc-days.tbd { color: var(--muted); }
+.rc-count {
+  flex: 0 0 60px; text-align: center; border-right: 1px solid var(--border); padding-right: 14px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.rc-days { font-size: 26px; font-weight: 800; color: var(--fitness); line-height: 1; font-variant-numeric: tabular-nums; }
+.rc-days-l { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 3px; }
+.rc-body { flex: 1; min-width: 0; }
+.rc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rc-top h3 { margin: 0; font-size: 16px; font-weight: 700; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
+.rc-role { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px; background: rgba(127, 127, 127, .16); color: var(--text-secondary); }
+.rc-role.a { background: var(--fitness); color: #fff; }
+.rc-date { color: var(--text-secondary); font-size: 13px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.rc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.rc-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: rgba(127, 127, 127, .12); border: 1px solid var(--border); color: var(--text-secondary); font-variant-numeric: tabular-nums; text-transform: capitalize; }
+.rc-chip.trail { background: rgba(12, 163, 12, .14); color: var(--good-ink); border-color: transparent; }
+.rc-chip.road { background: rgba(42, 120, 214, .12); color: var(--fitness); border-color: transparent; }
+.rc-chip.note { background: rgba(250, 178, 25, .18); color: #8a5b00; border-color: transparent; text-transform: none; }
+@media (prefers-color-scheme: dark) { .rc-chip.note { color: #fab219; } }
+.rc-focus { margin-top: 10px; color: var(--text-secondary); font-size: 13.5px; line-height: 1.5; }
+
 /* drag-to-select brush overlay on the load chart */
 .brush-sel { fill: var(--fitness); fill-opacity: .15; stroke: var(--fitness); stroke-opacity: .5; }
 

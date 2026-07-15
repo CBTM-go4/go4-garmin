@@ -342,6 +342,68 @@ function renderHistory(app, d) {
   app.append(card);
 }
 
+// ---------- goal races view (season targets + countdowns) ----------
+const fmtRaceDate = iso => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+async function loadRaces() {
+  const app = $('#app');
+  app.innerHTML = '<div class="loading">Loading your goal races…</div>';
+  let d;
+  try { d = await (await fetch('/api/races')).json(); }
+  catch (e) { app.innerHTML = `<div class="banner"><h2>Backend unreachable</h2><div class="muted">${e}</div></div>`; return; }
+  renderRaces(app, d);
+}
+
+function renderRaces(app, d) {
+  app.innerHTML = '';
+  const races = (d.races || []).slice().sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!races.length) { app.append(h('div', { class: 'card' }, h('div', { class: 'muted' }, 'No goal races set.'))); return; }
+  const goal = races.find(r => (r.priority || '').toUpperCase() === 'A') || races[races.length - 1];
+
+  app.append(h('div', { class: 'rangebar' }, `Your road to the 100th Comrades · ${races.length} goal races`));
+
+  // hero: countdown to the A-race
+  app.append(h('div', { class: 'race-hero' }, [
+    h('div', { class: 'rh-count' }, [String(Math.max(0, goal.days_to)), h('span', {}, ' days')]),
+    h('div', { class: 'rh-meta' }, [
+      h('div', { class: 'rh-label' }, 'to your goal race'),
+      h('div', { class: 'rh-name' }, goal.name),
+      h('div', { class: 'rh-sub' }, `${fmtRaceDate(goal.date)} · ${goal.location || ''}`),
+    ]),
+  ]));
+
+  const list = h('div', { class: 'race-list' });
+  races.forEach(r => list.append(raceCard(r, r === goal)));
+  app.append(list);
+}
+
+function raceCard(r, isGoal) {
+  const tbd = r.date == null;
+  const past = !tbd && r.days_to < 0;
+  const count = tbd
+    ? [h('div', { class: 'rc-days tbd' }, '??'), h('div', { class: 'rc-days-l' }, 'TBD')]
+    : past
+      ? [h('div', { class: 'rc-days' }, '✓'), h('div', { class: 'rc-days-l' }, 'done')]
+      : [h('div', { class: 'rc-days' }, String(r.days_to)), h('div', { class: 'rc-days-l' }, r.days_to === 1 ? 'day' : 'days')];
+  const chips = [
+    r.distance_km != null ? h('span', { class: 'rc-chip' }, `${r.distance_km} km`) : (tbd ? h('span', { class: 'rc-chip' }, '?? km') : null),
+    r.surface ? h('span', { class: 'rc-chip ' + r.surface }, r.surface) : null,
+    r.note ? h('span', { class: 'rc-chip note' }, r.note) : null,
+  ].filter(Boolean);
+  return h('article', { class: 'race-card' + (isGoal ? ' goal' : '') + (past ? ' past' : '') + (tbd ? ' tentative' : '') }, [
+    h('div', { class: 'rc-count' }, count),
+    h('div', { class: 'rc-body' }, [
+      h('div', { class: 'rc-top' }, [
+        h('h3', {}, r.name),
+        r.role ? h('span', { class: 'rc-role' + (isGoal ? ' a' : '') }, r.role) : null,
+      ]),
+      h('div', { class: 'rc-date' }, `${tbd ? 'Date TBD' : fmtRaceDate(r.date)}${r.location ? ' · ' + r.location : ''}`),
+      chips.length ? h('div', { class: 'rc-chips' }, chips) : null,
+      r.focus ? h('div', { class: 'rc-focus' }, r.focus) : null,
+    ]),
+  ]);
+}
+
 // Human label for the window actually being shown, e.g. "15 Jun – 11 Jul · 26 days".
 function rangeSummary(d) {
   const end = d.generated_for ? new Date(d.generated_for + 'T00:00:00') : new Date();
@@ -823,7 +885,7 @@ function iconFor(sev) { return ({ good: '✅', warning: '⚠️', caution: '⚠�
 // Keep the range in the URL so a refresh preserves it and the view is shareable.
 function syncUrl() {
   const parts = [];
-  if (state.view === 'history') { parts.push('view=history'); }
+  if (state.view !== 'dashboard') { parts.push('view=' + state.view); }
   else {
     parts.push(state.start ? `start=${state.start}` + (state.end ? `&end=${state.end}` : '') : `days=${state.days}`);
     if (state.compare) parts.push('compare=1');
@@ -831,15 +893,17 @@ function syncUrl() {
   history.replaceState(null, '', location.pathname + '?' + parts.join('&'));
 }
 
-// Switch between the dashboard and the all-time history view. The range controls only
-// apply to the dashboard, so they're hidden on history.
+// Switch between Dashboard, Goal Races and History. The range controls only apply to
+// the dashboard, so they're hidden on the other views.
+const VIEW_LOADERS = { dashboard: load, races: loadRaces, history: loadHistory };
 function switchView(v) {
   state.view = v;
   [...$('#tabs').children].forEach(b => b.classList.toggle('active', b.dataset.view === v));
-  const onDash = v !== 'history';
+  const onDash = v === 'dashboard';
   ['#rangeSeg', '#dateRange', '#compareBtn'].forEach(sel => { $(sel).style.display = onDash ? '' : 'none'; });
-  if (onDash) { reflectControls(); syncUrl(); load(); }   // load() also injects compare
-  else { syncUrl(); loadHistory(); }
+  if (onDash) reflectControls();
+  syncUrl();
+  (VIEW_LOADERS[v] || load)();   // dashboard's load() also injects compare
 }
 $('#tabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.classList.contains('active')) return;
@@ -883,7 +947,7 @@ $('#applyRange').addEventListener('click', applyRange);
 // Compare toggle: show/hide the period-vs-period card.
 $('#compareBtn').addEventListener('click', () => { state.compare = !state.compare; apply(); });
 
-$('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); state.view === 'history' ? loadHistory() : load(); });
+$('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refresh', { method: 'POST' }); (VIEW_LOADERS[state.view] || load)(); });
 
 // Restore state from the URL, cap the date inputs at today, then load.
 (function init() {
@@ -893,6 +957,7 @@ $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refre
   state.compare = p.get('compare') === '1';
   for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
   reflectControls();
-  if (p.get('view') === 'history') switchView('history');
+  const view = p.get('view');
+  if (view === 'history' || view === 'races') switchView(view);
   else load();
 })();
