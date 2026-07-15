@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cache, coach, demo, history, metrics
+from . import cache, coach, demo, history, metrics, store
 from .garmin import GarminData, is_demo
 from .mcp_client import GarminMCP
 
@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
     app.state.gd = GarminData(mcp)
     if is_demo():
         log.info("Running in DEMO mode (synthetic data)")
+    elif mcp:
+        # Populate/refresh the local activity store in the background so the first-ever
+        # load backfills without blocking startup; subsequent reads are served locally.
+        asyncio.create_task(_sync_store(app))
     yield
     if mcp:
         await mcp.stop()
@@ -75,6 +79,16 @@ async def _daily_with_fallback(fn, today: date, back: int = 2):
     return None
 
 
+async def _sync_store(app: FastAPI) -> None:
+    """Background wrapper around the activity sync; logs the outcome, swallows errors so a
+    Garmin hiccup never takes the server down (reads fall back to live fetches)."""
+    try:
+        n = await app.state.gd.sync_activities()
+        log.info("Activity store synced: %d activities written, %d total", n, store.count())
+    except Exception as e:  # noqa: BLE001
+        log.warning("Activity store sync failed: %s", e)
+
+
 @app.get("/api/status")
 async def status():
     g: GarminData = app.state.gd
@@ -83,6 +97,7 @@ async def status():
         "demo": is_demo(),
         "error": g.status_error,
         "tools": g.mcp.tool_names if g.mcp else [],
+        "activities_stored": store.count() if not is_demo() else 0,
     }
 
 
@@ -350,7 +365,14 @@ async def run_summary(activity_id: str):
 @app.post("/api/refresh")
 async def refresh():
     cache.clear()
-    return {"ok": True}
+    # Pull any activities recorded (or edited) since the last sync, so Refresh surfaces
+    # new runs — not just re-warms the cleared response cache.
+    written = 0
+    try:
+        written = await app.state.gd.sync_activities()
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "synced": written}
 
 
 # Static dashboard (mounted last so /api/* wins).

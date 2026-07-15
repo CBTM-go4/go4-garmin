@@ -11,7 +11,7 @@ import os
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from . import cache, demo
+from . import cache, demo, store
 from .mcp_client import GarminMCP, GarminMCPUnavailable
 
 # Activity type keys (garminconnect typeKey) that count as a run.
@@ -19,6 +19,13 @@ RUN_TYPES = {
     "running", "trail_running", "treadmill_running", "track_running",
     "indoor_running", "obstacle_run", "ultra_run", "virtual_run",
 }
+
+# Garmin Connect launched in 2007; no account predates it. The initial sync sweeps from
+# here to today, then incremental syncs only re-pull a recent window.
+_HISTORY_START = date(2007, 1, 1)
+# Re-pull this many trailing days on each incremental sync, so newly-recorded runs and
+# recent edits (rename, race retag) land without a full resync.
+_RESYNC_DAYS = 14
 
 _VOLATILE_TTL = 15 * 60          # today's data — refresh often
 _STABLE_TTL = 30 * 24 * 3600     # past, immutable data
@@ -45,6 +52,7 @@ class GarminData:
         self.mcp = mcp
         self._direct = None                       # lazily-logged-in garminconnect client
         self._direct_lock = asyncio.Lock()
+        self._sync_lock = asyncio.Lock()          # serialise activity-store syncs
 
     @property
     def available(self) -> bool:
@@ -103,8 +111,32 @@ class GarminData:
         return acts
 
     async def runs_between(self, start: date, end: date, stable: bool = False) -> list[dict]:
-        acts = await self.activities_between(start, end, stable=stable)
+        """Runs in the range. Served from the local activity store once it's synced
+        (instant, offline); before the first sync completes, falls back to a live fetch."""
+        if not is_demo() and store.is_synced():
+            acts = store.activities_between(start, end)
+        else:
+            acts = await self.activities_between(start, end, stable=stable)
         return [a for a in acts if (a.get("type") or "") in RUN_TYPES]
+
+    async def sync_activities(self) -> int:
+        """Pull activities from Garmin into the local store. The first call backfills the
+        whole history; later calls only re-pull a recent window (new runs + edits). Cheap
+        and idempotent — safe to call on startup and on every manual refresh."""
+        if is_demo() or self.mcp is None:
+            return 0
+        async with self._sync_lock:
+            today = date.today()
+            if store.is_synced() and store.count():
+                latest = store.latest_start()
+                latest_d = date.fromisoformat(latest[:10]) if latest else _HISTORY_START
+                start = latest_d - timedelta(days=_RESYNC_DAYS)
+            else:
+                start = _HISTORY_START
+            acts = await self.activities_between(start, today)
+            n = store.upsert(acts)
+            store.mark_synced()
+            return n
 
     async def activity(self, activity_id: int | str) -> dict | None:
         return await self._call("get_activity", ttl=_STABLE_TTL, activity_id=activity_id)
