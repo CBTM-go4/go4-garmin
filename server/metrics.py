@@ -235,6 +235,31 @@ def run_zone_distribution(hr_zones: Any) -> dict | None:
     return {"zones": zones, "total_seconds": round(total)}
 
 
+def aggregate_zones(zone_lists: list) -> dict | None:
+    """Sum *measured* per-second time-in-zone across many runs (each the raw
+    get_activity_hr_in_timezones list) into one distribution — same shape as
+    approx_weekly_zones, but real rather than estimated from average HR."""
+    secs = [0.0] * 5
+    seen = False
+    for hz in zone_lists:
+        if not isinstance(hz, list):
+            continue
+        for z in hz:
+            zn = int(z.get("zoneNumber") or 0)
+            if 1 <= zn <= 5:
+                secs[zn - 1] += float(z.get("secsInZone") or 0)
+                seen = True
+    total = sum(secs)
+    if not seen or total <= 0:
+        return None
+    zones = [{"zone": i + 1, "seconds": round(s), "pct": round(100 * s / total, 1)}
+             for i, s in enumerate(secs)]
+    easy = zones[0]["pct"] + zones[1]["pct"]
+    hard = zones[3]["pct"] + zones[4]["pct"]
+    return {"zones": zones, "easy_pct": round(easy, 1), "hard_pct": round(hard, 1),
+            "polarized": easy >= 75 and hard >= 10, "measured": True}
+
+
 # ---- aerobic decoupling (from splits) -------------------------------------
 def decoupling(splits: Any) -> dict | None:
     """Pa:HR aerobic decoupling — compares speed/HR in the 1st vs 2nd half.

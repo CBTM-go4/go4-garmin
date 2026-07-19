@@ -73,18 +73,29 @@ def build(ov: dict[str, Any]) -> dict:
             f"Sleep, HRV and Body Battery are all in a good place ({rec_state['signals']}). "
             "Your body is primed to absorb a harder session if the plan calls for one."))
 
-    # ---- Intensity distribution (from hard-session frequency) ------------
-    hard_frac = _hard_fraction(ov.get("runs") or [], ov.get("hr_max") or 190)
-    if hard_frac is not None:
-        if hard_frac > 0.4:
-            insights.append(_i("caution", "Too many hard sessions",
-                f"About {round(hard_frac*100)}% of your runs are hard efforts. The "
-                "80/20 rule says ~1 in 5 should be. Make your easy days genuinely easy "
-                "so quality sessions land with fresh legs."))
-        elif hard_frac <= 0.25 and len(ov.get("runs") or []) >= 8:
+    # ---- Intensity distribution (time in zone, not run-level avg HR) ------
+    # Keyed "intensity" so the frontend can swap in the *measured* zone split once
+    # per-second HR data loads (this build uses the fast avg-HR estimate).
+    ez, hz = zones.get("easy_pct"), zones.get("hard_pct")
+    z3 = next((z["pct"] for z in (zones.get("zones") or []) if z.get("zone") == 3), 0)
+    if ez is not None and hz is not None and len(ov.get("runs") or []) >= 5:
+        if ez >= 75 and hz >= 10:
             insights.append(_i("good", "Well-polarized training",
-                f"Only ~{round(hard_frac*100)}% of runs are hard — the rest easy. That "
-                "80/20 shape drives aerobic development with low injury cost."))
+                f"About {ez}% of your running time is easy and {hz}% hard — the ~80/20 "
+                "shape that builds aerobic fitness with low injury cost.", key="intensity"))
+        elif z3 >= 35:
+            insights.append(_i("caution", "Too much “grey zone”",
+                f"Around {z3}% of your running time sits in Zone 3 — moderate effort that's "
+                "too hard to build your aerobic base yet too easy to count as a real workout. "
+                "Slow your easy runs down into Z2; aim for roughly 80% easy.", key="intensity"))
+        elif hz >= 30:
+            insights.append(_i("caution", "Too many hard efforts",
+                f"About {hz}% of your running time is hard (Z4–5) vs a target near 20%. Make "
+                "easy days genuinely easy so quality sessions land on fresh legs.", key="intensity"))
+        else:
+            insights.append(_i("info", "Intensity balance",
+                f"About {ez}% of your time is easy, {hz}% hard. Aim for roughly 80% easy.",
+                key="intensity"))
 
     # ---- Weekly ramp (10% rule) ------------------------------------------
     complete = [w for w in weekly if w["km"] > 0]
@@ -230,18 +241,6 @@ def _headline(tsb, acwr_zone, ctl, rec_state=None) -> str:
     return "Let's build a consistent base."
 
 
-def _hard_fraction(runs: list[dict], hrmax: int) -> float | None:
-    if not runs:
-        return None
-    hard = 0
-    for r in runs:
-        rpe = r.get("workout_rpe") or 0
-        hr = r.get("avg_hr_bpm") or 0
-        if rpe >= 7 or (hrmax and hr >= hrmax * 0.85) or r.get("event_type") == "race":
-            hard += 1
-    return hard / len(runs)
-
-
 def _days_since_quality(runs: list[dict]) -> int | None:
     from datetime import date, datetime
     best = None
@@ -262,8 +261,11 @@ def _days_since_quality(runs: list[dict]) -> int | None:
     return best
 
 
-def _i(severity: str, title: str, text: str) -> dict:
-    return {"severity": severity, "title": title, "text": text}
+def _i(severity: str, title: str, text: str, key: str | None = None) -> dict:
+    d = {"severity": severity, "title": title, "text": text}
+    if key:
+        d["key"] = key
+    return d
 
 
 def _rec(kind: str, detail: str) -> dict:

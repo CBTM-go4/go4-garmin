@@ -38,7 +38,8 @@ const HELP = {
   'Training Load & Form': 'Fitness (CTL, 42-day avg), Fatigue (ATL, 7-day avg) and Form (TSB = CTL−ATL) over time. Fatigue above fitness = building; fitness above fatigue = fresh.',
   'Weekly Volume': 'Kilometres run each week. Watch for jumps bigger than ~10% week-on-week, which raise injury risk.',
   'Monthly Volume': 'Kilometres run each month (long ranges are bucketed monthly so the chart stays readable).',
-  'Intensity Mix': 'Approximate share of running time in each HR zone (Z1 easy → Z5 max), estimated from each run’s average HR. Aim for roughly 80% easy.',
+  'Intensity Mix': 'Share of running time in each HR zone (Z1 easy → Z5 max). Loads first as an estimate from each run’s average HR, then upgrades to measured per-second time-in-zone once the per-run data is fetched. Aim for roughly 80% easy.',
+  'Long-Run Durability': 'Aerobic decoupling (Pa:HR drift) on each of your longer runs — how much your pace-per-heartbeat faded from the first half to the second. Lower is better; a falling trend over weeks is a direct sign your aerobic base is deepening. Under 5% is coupled, over 8% is significant drift (fatigue, heat or under-fuelling). Longer and hotter runs naturally drift more.',
   'Aerobic Efficiency': 'Easy-run speed per heartbeat (m/s per bpm). Rising over time means your aerobic base is improving — you’re faster at the same effort.',
   'Race Predictions': 'Three estimates side by side. Realistic = Daniels VDOT from your best actual effort (only what you’ve demonstrated). HR-based = your pace-vs-HR profile read at threshold HR — reliable only if your faster runs are your higher-HR ones (heat/hills distort it). Garmin = its VO₂max estimate (tends optimistic). Longer distances assume you’ve done the endurance work.',
   'Sleep': 'Last night’s sleep score and stage breakdown (deep / REM / light), plus your recent nightly duration. Deep and REM drive physical and mental recovery; aim for consistency.',
@@ -338,7 +339,7 @@ function renderHistory(app, d) {
     tb.append(tr);
   });
   t.append(tb);
-  card.append(t);
+  card.append(h('div', { class: 'table-wrap' }, [t]));
   app.append(card);
 }
 
@@ -387,7 +388,7 @@ function raceCard(r, isGoal) {
       : [h('div', { class: 'rc-days' }, String(r.days_to)), h('div', { class: 'rc-days-l' }, r.days_to === 1 ? 'day' : 'days')];
   const chips = [
     r.distance_km != null ? h('span', { class: 'rc-chip' }, `${r.distance_km} km`) : (tbd ? h('span', { class: 'rc-chip' }, '?? km') : null),
-    r.surface ? h('span', { class: 'rc-chip ' + r.surface }, r.surface) : null,
+    r.surface ? h('span', { class: 'rc-chip ' + r.surface }, r.surface[0].toUpperCase() + r.surface.slice(1)) : null,
     r.note ? h('span', { class: 'rc-chip note' }, r.note) : null,
   ].filter(Boolean);
   return h('article', { class: 'race-card' + (isGoal ? ' goal' : '') + (past ? ' past' : '') + (tbd ? ' tentative' : '') }, [
@@ -417,6 +418,9 @@ function rangeSummary(d) {
 
 function render(app, d) {
   app.innerHTML = '';
+  // Stash the athlete's HR bounds so the run-detail modal can compute the same
+  // TRIMP load the runs table shows (Garmin's get_activity carries no load field).
+  state.hrMax = d.hr_max; state.hrRest = d.hr_rest;
   app.append(h('div', { class: 'rangebar' }, rangeSummary(d)));
   const s = d.load_series || [], last = s[s.length - 1] || {};
   const c = d.coach || {};
@@ -484,16 +488,7 @@ function render(app, d) {
   const volCard = h('div', { class: 'card' }, [h('div', { class: 'chart-title' }, [h('h3', {}, volTitle), h('span', { class: 'hint' }, `km/${vol.granularity}`)])]);
   volCard.append(barChart(volItems, { color: '--fitness', metric: 'distance', unit: ' km', height: 210 }));
 
-  const z = d.zones?.zones || [];
-  const zColors = ['--z1', '--z2', '--z3', '--z4', '--z5'];
-  const segs = z.map((zz, i) => ({ label: `Zone ${zz.zone}`, value: zz.seconds, pct: zz.pct, color: zColors[i] }));
-  const zoneCard = h('div', { class: 'card' }, [
-    h('div', { class: 'chart-title' }, [h('h3', {}, 'Intensity Mix'), h('span', { class: 'hint' }, 'estimated from avg HR')]),
-    legend([1, 2, 3, 4, 5].map(n => ({ name: `Z${n}`, color: zColors[n - 1] }))),
-  ]);
-  zoneCard.append(stackedBar(segs));
-  zoneCard.append(h('div', { class: 'hint', style: 'margin-top:8px' }, `Easy (Z1–2) ≈ ${d.zones?.easy_pct ?? '–'}% · Hard (Z4–5) ≈ ${d.zones?.hard_pct ?? '–'}%`));
-  app.append(h('div', { class: 'grid two', style: 'margin-bottom:16px' }, [volCard, zoneCard]));
+  app.append(h('div', { class: 'grid two', style: 'margin-bottom:16px' }, [volCard, intensityCard(d.zones || {})]));
 
   // recovery (sleep / body battery)
   const recov = recoverySection(d);
@@ -516,14 +511,20 @@ function render(app, d) {
     app.append(ec);
   }
 
+  // deeper per-activity analysis (measured zones + long-run durability), filled lazily.
+  // Show a placeholder so the ~10s per-run fetch reads as "working", not "missing".
+  app.append(h('div', { id: 'analysisSlot' }, [
+    h('div', { class: 'card', style: 'margin-bottom:16px' }, [
+      h('div', { class: 'chart-title' }, [h('h3', {}, 'Long-Run Durability'), h('span', { class: 'hint' }, 'analyzing…')]),
+      h('div', { class: 'loading', style: 'padding:22px 0' }, 'Crunching per-run heart rate & pace…'),
+    ]),
+  ]));
+
   // coach insights (below the charts)
   if (c.insights?.length) {
     const box = h('div', { class: 'card', style: 'margin-bottom:16px' }, [h('h3', {}, 'Insights')]);
     const ins = h('div', { class: 'insights' });
-    c.insights.forEach(i => ins.append(h('div', { class: 'insight ' + i.severity }, [
-      h('div', { class: 'ic' }, iconFor(i.severity)),
-      h('div', {}, [h('div', { class: 't' }, i.title), h('div', { class: 'x' }, i.text)]),
-    ])));
+    c.insights.forEach(i => ins.append(insightNode(i)));
     box.append(ins); app.append(box);
   }
 
@@ -535,6 +536,78 @@ function render(app, d) {
     const t = el.textContent.trim();
     if (HELP[t]) addHelp(el, HELP[t]);
   });
+
+  loadAnalysis();   // upgrade the intensity mix to measured + add the durability chart
+}
+
+// ---------- deeper analysis (measured intensity + long-run decoupling trend) ----------
+function intensityCard(z) {
+  const zColors = ['--z1', '--z2', '--z3', '--z4', '--z5'];
+  const zones = z.zones || [];
+  const segs = zones.map(zz => ({ label: `Zone ${zz.zone}`, value: zz.seconds, pct: zz.pct, color: zColors[Math.min(4, (zz.zone || 1) - 1)] }));
+  const measured = !!z.measured;
+  const card = h('div', { class: 'card', id: 'zoneCard' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Intensity Mix'),
+      h('span', { class: 'hint' }, measured ? 'measured · actual time in zone' : 'estimated from avg HR')]),
+    legend([1, 2, 3, 4, 5].map(n => ({ name: `Z${n}`, color: zColors[n - 1] }))),
+  ]);
+  card.append(stackedBar(segs));
+  card.append(h('div', { class: 'hint', style: 'margin-top:8px' },
+    `Easy (Z1–2) ≈ ${z.easy_pct ?? '–'}% · Hard (Z4–5) ≈ ${z.hard_pct ?? '–'}%${measured ? '' : ' · refining…'}`));
+  return card;
+}
+
+function insightNode(i) {
+  return h('div', { class: 'insight ' + i.severity, 'data-key': i.key || '' }, [
+    h('div', { class: 'ic' }, iconFor(i.severity)),
+    h('div', {}, [h('div', { class: 't' }, i.title), h('div', { class: 'x' }, i.text)]),
+  ]);
+}
+
+// The coach's intensity insight, recomputed from *measured* time-in-zone.
+function intensityInsight(z) {
+  const easy = z.easy_pct, hard = z.hard_pct;
+  const z3 = (z.zones || []).find(zz => zz.zone === 3)?.pct || 0;
+  if (easy >= 75 && hard >= 10)
+    return { key: 'intensity', severity: 'good', title: 'Well-polarized training', text: `About ${easy}% of your running time is easy and ${hard}% hard — the ~80/20 shape that builds aerobic fitness with low injury cost.` };
+  if (z3 >= 35)
+    return { key: 'intensity', severity: 'caution', title: 'Too much “grey zone”', text: `Around ${z3}% of your running time sits in Zone 3 — moderate effort that's too hard to build your aerobic base yet too easy to count as a real workout. Slow your easy runs down into Z2; aim for roughly 80% easy.` };
+  if (hard >= 30)
+    return { key: 'intensity', severity: 'caution', title: 'Too many hard efforts', text: `About ${hard}% of your running time is hard (Z4–5) vs a target near 20%. Make easy days genuinely easy so quality lands on fresh legs.` };
+  return { key: 'intensity', severity: 'info', title: 'Intensity balance', text: `About ${easy}% of your time is easy, ${hard}% hard. Aim for roughly 80% easy.` };
+}
+
+async function loadAnalysis() {
+  let d;
+  try { d = await (await fetch(`/api/analysis?${rangeQuery()}`)).json(); }
+  catch { return; }
+  if (!d || !d.available) return;
+  // Upgrade the intensity mix from the avg-HR estimate to measured time-in-zone.
+  if (d.true_zones) {
+    const old = $('#zoneCard');
+    if (old) { const nw = intensityCard(d.true_zones); old.replaceWith(nw); addHelp(nw.querySelector('h3'), HELP['Intensity Mix']); }
+    // And keep the coach's intensity insight consistent with the measured split.
+    const ins = document.querySelector('.insight[data-key="intensity"]');
+    if (ins) ins.replaceWith(insightNode(intensityInsight(d.true_zones)));
+  }
+  if (d.decoupling_trend?.length >= 2) renderDurability(d.decoupling_trend, d.long_run_km);
+  else { const slot = $('#analysisSlot'); if (slot) slot.innerHTML = ''; }   // nothing to plot — drop the placeholder
+}
+
+function renderDurability(trend, minKm) {
+  const slot = $('#analysisSlot'); if (!slot) return;
+  const pts = trend.map(t => ({ label: t.date, values: { dc: t.decoupling_pct }, raw: t }));
+  const card = h('div', { class: 'card', style: 'margin-bottom:16px' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Long-Run Durability'),
+      h('span', { class: 'hint' }, `aerobic decoupling on runs ≥ ${minKm || 10} km — lower & falling = fitter`)]),
+  ]);
+  card.append(lineChart(pts, [{ key: 'dc', name: 'Decoupling', color: '--fatigue', unit: '%' }],
+    { height: 190, decimals: 1, endLabels: true, tipFormat: (se, v, p) => `${v.toFixed(1)}% · ${p.raw.distance_km} km` }));
+  card.append(h('div', { class: 'hint', style: 'margin-top:8px' },
+    'How much your pace-per-heartbeat drifted from the first half of each long run to the second. Under 5% is aerobically coupled; a downward trend over weeks means your engine is holding pace with less fade — the core signal of building endurance. (Longer and hotter runs naturally drift more.)'));
+  slot.innerHTML = '';
+  slot.append(card);
+  addHelp(card.querySelector('h3'), HELP['Long-Run Durability']);
 }
 
 const trimpJS = (hr, dur, hrmax, hrrest) => {
@@ -578,7 +651,7 @@ function runsTable(runs, hrMax = 190, hrRest = 48) {
     tb.append(tr);
     if (r.id != null) toFill.push({ id: r.id, drift, temp });
   });
-  t.append(tb); card.append(t);
+  t.append(tb); card.append(h('div', { class: 'table-wrap' }, [t]));
   fillRunMeta(toFill);   // lazily fill decoupling + temperature
   return card;
 }
@@ -627,13 +700,17 @@ async function openRun(id, name) {
   m.innerHTML = `<button class="close" id="mClose">×</button><h2>${a.name || name}</h2><div class="muted">${a.start_time_local ? new Date(a.start_time_local).toLocaleString() : ''}</div>`;
   $('#mClose').onclick = () => bg.classList.remove('open');
   const pace = a.duration_seconds && a.distance_meters ? a.duration_seconds / (a.distance_meters / 1000) : 0;
+  // Garmin's get_activity has no training-load field, so mirror the runs table's TRIMP.
+  const load = trimpJS(a.avg_hr_bpm, a.duration_seconds, state.hrMax || 190, state.hrRest || 48);
+  // workout_rpe is Garmin's 0–100 perceived-exertion scale; shown as the familiar /10.
+  const rpe = a.workout_rpe != null ? Math.round(a.workout_rpe / 10) : null;
   const kv = h('div', { class: 'kv' }, [
     kb('Distance', `${km(a.distance_meters || 0)} km`), kb('Time', fmtDur(a.duration_seconds || 0)),
     kb('Avg pace', fmtPace(pace)), kb('Avg HR', a.avg_hr_bpm ? a.avg_hr_bpm + ' bpm' : '–'),
     kb('Cadence', a.avg_cadence ? Math.round(a.avg_cadence) + ' spm' : '–'),
-    kb('Training load', a.training_load != null ? Math.round(a.training_load) : '–'),
+    kb('Training load', load != null ? `${load}` : '–'),
     kb('Training effect', a.training_effect != null ? Number(a.training_effect).toFixed(1) : '–'),
-    kb('RPE', a.workout_rpe != null ? a.workout_rpe + '/10' : '–'),
+    kb('RPE', rpe != null ? rpe + '/10' : '–'),
     w && w.temp_c != null ? kb('Temp', `${w.temp_c}°C`) : null,
     w && w.feels_c != null && w.feels_c !== w.temp_c ? kb('Feels like', `${w.feels_c}°C`) : null,
     w && w.humidity != null ? kb('Humidity', `${w.humidity}%`) : null,
@@ -750,7 +827,7 @@ function racePredictions(myp, potential, garmin) {
   const card = h('div', { class: 'card', style: 'margin-bottom:16px' }, [
     h('div', { class: 'chart-title' }, [h('h3', {}, 'Race Predictions'), h('span', { class: 'hint' }, 'modelled from your runs')]),
   ]);
-  card.append(t);
+  card.append(h('div', { class: 'table-wrap' }, [t]));
 
   const notes = [];
   if (myp?.predictions) {

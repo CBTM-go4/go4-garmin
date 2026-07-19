@@ -53,6 +53,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Garmin Coach", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def _no_store(request, call_next):
+    """Local dashboard — never let the browser serve a stale page/script. Kills the
+    recurring 'I edited the frontend but the browser shows the old one' problem."""
+    resp = await call_next(request)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 def _norm_hrv(h: Any) -> dict:
     """Garmin's HRV fields vary (real: *_hrv_ms; demo: short names). Normalize."""
     if not isinstance(h, dict):
@@ -240,6 +249,61 @@ async def history_years():
             "km": round(sum(y["km"] for y in years), 1),
         },
     }
+
+
+# Runs at/above this distance feed the long-run durability trend.
+LONG_RUN_KM = 10.0
+# Bound the per-activity fan-out (each needs its own cached Garmin call).
+_ZONE_RUN_CAP = 60
+_DECOUPLE_RUN_CAP = 40
+
+
+@app.get("/api/analysis")
+async def analysis(days: int = 90, start: str | None = None, end: str | None = None):
+    """Deeper, per-activity analysis (heavier than /overview, so fetched separately):
+    the *measured* intensity distribution and aerobic-decoupling trend on long runs.
+    Both fan out one cached Garmin call per run, with bounded concurrency."""
+    g: GarminData = app.state.gd
+    if not g.available:
+        return JSONResponse({"available": False, "demo": is_demo(),
+                             "error": g.status_error}, status_code=200)
+    try:
+        start_d, anchor, _ = _resolve_window(days, start, end)
+    except ValueError:
+        return JSONResponse({"available": True, "error": "Invalid start/end date."}, status_code=400)
+
+    runs = await g.runs_between(start_d, anchor)
+    sem = asyncio.Semaphore(4)
+
+    async def hr_zones(r):
+        async with sem:
+            return await g.activity_hr_zones(r["id"]) if r.get("id") is not None else None
+
+    async def run_decoupling(r):
+        async with sem:
+            sp = await g.activity_splits(r["id"]) if r.get("id") is not None else None
+            return metrics.decoupling(sp)
+
+    # Measured intensity mix — real time-in-zone, not the avg-HR estimate.
+    zone_lists = await asyncio.gather(*[hr_zones(r) for r in runs[:_ZONE_RUN_CAP]])
+    true_zones = metrics.aggregate_zones([z for z in zone_lists if z])
+
+    # Long-run durability — decoupling on each longer run, oldest first.
+    long_runs = [r for r in runs if (r.get("distance_meters") or 0) / 1000 >= LONG_RUN_KM]
+    long_runs.sort(key=lambda r: metrics._run_date(r) or date.min)
+    long_runs = long_runs[-_DECOUPLE_RUN_CAP:]
+    dcs = await asyncio.gather(*[run_decoupling(r) for r in long_runs])
+    trend = []
+    for r, dc in zip(long_runs, dcs):
+        rd = metrics._run_date(r)
+        if dc and rd:
+            trend.append({"date": rd.isoformat(),
+                          "distance_km": round((r.get("distance_meters") or 0) / 1000, 1),
+                          "decoupling_pct": dc["decoupling_pct"],
+                          "name": r.get("name")})
+
+    return {"available": True, "demo": is_demo(),
+            "true_zones": true_zones, "decoupling_trend": trend, "long_run_km": LONG_RUN_KM}
 
 
 @app.get("/api/compare")

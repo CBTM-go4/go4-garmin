@@ -159,7 +159,7 @@ table.history td.longest .muted { font-size: 12.5px; }
 .rc-role.a { background: var(--fitness); color: #fff; }
 .rc-date { color: var(--text-secondary); font-size: 13px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 .rc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
-.rc-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: rgba(127, 127, 127, .12); border: 1px solid var(--border); color: var(--text-secondary); font-variant-numeric: tabular-nums; text-transform: capitalize; }
+.rc-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: rgba(127, 127, 127, .12); border: 1px solid var(--border); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .rc-chip.trail { background: rgba(12, 163, 12, .14); color: var(--good-ink); border-color: transparent; }
 .rc-chip.road { background: rgba(42, 120, 214, .12); color: var(--fitness); border-color: transparent; }
 .rc-chip.note { background: rgba(250, 178, 25, .18); color: #8a5b00; border-color: transparent; text-transform: none; }
@@ -291,3 +291,25 @@ tbody tr:hover { background: rgba(42,120,214,.06); }
 
 .muted { color: var(--muted); }
 .loading { text-align:center; color: var(--muted); padding: 60px 0; }
+
+/* --- responsive / overflow robustness ---------------------------------- */
+/* Grid & flex items default to min-width:auto, which refuses to shrink below
+   their content (a wide chart or table) and blows the page out sideways on
+   mobile. Let them shrink, and give wide content its own scroll container. */
+html, body { max-width: 100%; overflow-x: hidden; }
+.card, .grid > *, .hero > *, .two > * { min-width: 0; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.controls { flex-wrap: wrap; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 16px 14px 64px; }
+  header.top { gap: 10px; row-gap: 12px; }
+  .controls { width: 100%; }
+  .seg, .daterange { flex-wrap: wrap; }
+  .daterange input[type="date"] { flex: 1 1 auto; }
+  .brand h1 { font-size: 20px; }
+  .hero .headline { font-size: 19px; }
+  .cards { grid-template-columns: 1fr 1fr; }
+  .tabs button { padding: 8px 11px; font-size: 13px; }
+}
+
