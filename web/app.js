@@ -458,7 +458,8 @@ function heatStreak(entries) {
 // detour stays faint — the same "repetition becomes colour" idea as the calendar, in space
 // instead of time.
 const prefersDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-const mapState = { z: 0, cx: 0, cy: 0, year: 'all', place: 0, tracks: [], places: [], canvas: null };
+const mapState = { z: 0, cx: 0, cy: 0, year: 'all', place: 0, tracks: [], places: [], canvas: null,
+                   tiles: !!localStorage.getItem('mapTiles') };
 
 // Group routes into the places they happened. Without a geocoder (and this page has no
 // network access beyond its own backend) the labels come from Garmin itself, which names
@@ -512,6 +513,51 @@ const mercY = lat => {
   return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
 };
 
+// ---------- optional tile backdrop ----------
+// Off by default: the routes are the point, and without tiles the view needs no network
+// at all. When on, it uses CARTO's muted basemaps (positron / dark matter) rather than
+// standard OSM — a colourful street map fights the heat layer for attention, and these
+// are designed to sit underneath data. Attribution is drawn on the canvas whenever
+// tiles are showing, as their terms require.
+const TILE_URL = { light: 'https://basemaps.cartocdn.com/light_all/', dark: 'https://basemaps.cartocdn.com/dark_all/' };
+const TILE_ATTR = '© OpenStreetMap contributors © CARTO';
+const tileCache = new Map();
+let tileRedraw = 0;
+
+function tileImage(z, x, y, dark) {
+  const key = `${dark ? 'd' : 'l'}/${z}/${x}/${y}`;
+  let img = tileCache.get(key);
+  if (img) return img;
+  img = new Image();
+  img.crossOrigin = 'anonymous';          // keeps the canvas untainted, so pixel reads still work
+  img.src = `${TILE_URL[dark ? 'dark' : 'light']}${z}/${x}/${y}${devicePixelRatio > 1 ? '@2x' : ''}.png`;
+  // Tiles arrive one by one; coalesce their redraws into a single frame.
+  img.onload = () => { cancelAnimationFrame(tileRedraw); tileRedraw = requestAnimationFrame(drawMap); };
+  img.onerror = () => { img.failed = true; };
+  if (tileCache.size > 600) tileCache.clear();   // crude bound; refetches are cache hits in the browser
+  tileCache.set(key, img);
+  return img;
+}
+
+function drawTiles(ctx, w, hgt, dark) {
+  const { z, cx, cy } = mapState;
+  // Pick the tile zoom whose native scale is closest to the current view.
+  const Z = Math.max(0, Math.min(19, Math.round(Math.log2(z / 256))));
+  const n = 2 ** Z, size = z / n;
+  const x0 = Math.floor((cx - (w / 2) / z) * n), x1 = Math.floor((cx + (w / 2) / z) * n);
+  const y0 = Math.max(0, Math.floor((cy - (hgt / 2) / z) * n));
+  const y1 = Math.min(n - 1, Math.floor((cy + (hgt / 2) / z) * n));
+  if ((x1 - x0) * (y1 - y0) > 400) return;      // zoomed way out: not worth a tile storm
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) {
+      const img = tileImage(Z, ((tx % n) + n) % n, ty, dark);
+      if (!img.complete || !img.naturalWidth) continue;
+      // +1 px overdraw hides the seams that fractional positions leave between tiles.
+      ctx.drawImage(img, (tx / n - cx) * z + w / 2, (ty / n - cy) * z + hgt / 2, size + 1, size + 1);
+    }
+  }
+}
+
 async function loadMap() {
   const app = $('#app');
   app.innerHTML = '<div class="loading">Loading your routes…</div>';
@@ -547,7 +593,7 @@ function renderMap(app, d) {
       h('h3', {}, 'Route Heatmap'),
       // Light theme strokes multiply down, dark theme adds up, so the word for "ran it
       // often" is literally the opposite in each — say the one the reader is looking at.
-      h('span', { class: 'hint' }, `${prefersDark() ? 'brighter' : 'darker'} = run more often · drag to pan, scroll to zoom`),
+      h('span', { class: 'hint' }, `${prefersDark() ? 'brighter' : 'darker'} = run more often · 🗺 adds a street map`),
     ]),
   ]);
   addHelp(card.querySelector('h3'), HELP['Route Heatmap']);
@@ -580,15 +626,38 @@ function renderMap(app, d) {
   const wrap = h('div', { class: 'map-wrap' }, [
     canvas,
     h('div', { class: 'map-ctrls' }, [
+      h('button', { class: 'btn' + (mapState.tiles ? ' active' : ''), title: 'Street map backdrop' }, '🗺'),
+      h('button', { class: 'btn', title: 'Expand to full window (Esc to close)' }, '⛶'),
       h('button', { class: 'btn', title: 'Zoom in' }, '+'),
       h('button', { class: 'btn', title: 'Zoom out' }, '–'),
-      h('button', { class: 'btn', title: 'Fit all routes' }, '⤢'),
+      h('button', { class: 'btn', title: 'Fit routes to view' }, '⤢'),
     ]),
   ]);
-  const [zin, zout, zfit] = wrap.querySelectorAll('.map-ctrls button');
+  const [ztiles, zbig, zin, zout, zfit] = wrap.querySelectorAll('.map-ctrls button');
+  ztiles.onclick = () => {
+    mapState.tiles = !mapState.tiles;
+    localStorage.setItem('mapTiles', mapState.tiles ? '1' : '');
+    ztiles.classList.toggle('active', mapState.tiles);
+    drawMap();
+  };
   zin.onclick = () => { mapState.z *= 1.6; drawMap(); updateMapFoot(foot); };
   zout.onclick = () => { mapState.z /= 1.6; drawMap(); updateMapFoot(foot); };
   zfit.onclick = () => { fitMap(); drawMap(); updateMapFoot(foot); };
+  // Expanding changes the canvas size, so the view has to be re-fitted to the new shape
+  // — otherwise the extra room appears as margin rather than as more map.
+  const toggleBig = () => {
+    const on = wrap.classList.toggle('expanded');
+    zbig.textContent = on ? '✕' : '⛶';
+    zbig.title = on ? 'Close full-window map' : 'Expand to full window (Esc to close)';
+    requestAnimationFrame(() => { fitMap(); drawMap(); updateMapFoot(foot); });
+  };
+  zbig.onclick = toggleBig;
+  addEventListener('keydown', e => {
+    // The view re-renders (tab switches, backfill polls), so old handlers linger on
+    // detached nodes — ignore any whose map is no longer on the page.
+    if (!document.contains(wrap)) return;
+    if (e.key === 'Escape' && wrap.classList.contains('expanded')) toggleBig();
+  });
 
   const foot = h('div', { class: 'heat-foot' });
   card.append(placeSeg, seg, wrap, foot);
@@ -618,17 +687,21 @@ function visibleTracks() {
 }
 
 // Fit the visible routes into the canvas with a small margin.
+//
+// Fitted to the 1st-99th percentile of points rather than the outright extremes: a
+// couple of GPS drift spikes, or a run that started in the car, otherwise stretch the
+// box many kilometres and shrink the part you actually ran to a smudge. The stray
+// lines still draw — they're just allowed off the edge.
 function fitMap() {
   const ts = visibleTracks();
   if (!ts.length) return;
-  let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
-  for (const t of ts) for (const [la, lo] of t.pts) {
-    const x = mercX(lo), y = mercY(la);
-    if (x < x0) x0 = x; if (x > x1) x1 = x;
-    if (y < y0) y0 = y; if (y > y1) y1 = y;
-  }
+  const xs = [], ys = [];
+  for (const t of ts) for (const [la, lo] of t.pts) { xs.push(mercX(lo)); ys.push(mercY(la)); }
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+  const lo = i => i[Math.floor(i.length * 0.01)], hi = i => i[Math.floor(i.length * 0.99)];
+  const x0 = lo(xs), x1 = hi(xs), y0 = lo(ys), y1 = hi(ys);
   const c = mapState.canvas, w = c.clientWidth, hgt = c.clientHeight;
-  mapState.z = 0.9 * Math.min(w / Math.max(x1 - x0, 1e-6), hgt / Math.max(y1 - y0, 1e-6));
+  mapState.z = 0.92 * Math.min(w / Math.max(x1 - x0, 1e-6), hgt / Math.max(y1 - y0, 1e-6));
   mapState.cx = (x0 + x1) / 2;
   mapState.cy = (y0 + y1) / 2;
 }
@@ -647,11 +720,15 @@ function drawMap() {
   const dark = prefersDark();
   ctx.fillStyle = dark ? '#0c1118' : '#ffffff';
   ctx.fillRect(0, 0, w, hgt);
+  if (mapState.tiles) drawTiles(ctx, w, hgt, dark);
 
   // Dark: strokes add toward white-hot. Light: strokes multiply down toward deep blue —
-  // so in both themes, more running = further from the background.
+  // so in both themes, more running = further from the background. Over a basemap the
+  // strokes run hotter, or the streets underneath wash them out.
   ctx.globalCompositeOperation = dark ? 'lighter' : 'multiply';
-  ctx.strokeStyle = dark ? 'rgba(64,132,222,0.30)' : 'rgba(120,170,225,0.55)';
+  ctx.strokeStyle = mapState.tiles
+    ? (dark ? 'rgba(90,160,240,0.34)' : 'rgba(90,145,215,0.45)')
+    : (dark ? 'rgba(64,132,222,0.30)' : 'rgba(120,170,225,0.55)');
   ctx.lineWidth = 1.4;
   ctx.lineJoin = ctx.lineCap = 'round';
 
@@ -670,6 +747,13 @@ function drawMap() {
   }
   ctx.globalCompositeOperation = 'source-over';
   drawScaleBar(ctx, w, hgt, dark);
+  if (mapState.tiles) {
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillStyle = dark ? 'rgba(255,255,255,.5)' : 'rgba(11,11,11,.5)';
+    ctx.textAlign = 'right';
+    ctx.fillText(TILE_ATTR, w - 8, hgt - 7);
+    ctx.textAlign = 'left';
+  }
 }
 
 // A map without a scale is unreadable — this is the one piece of chrome the render needs.
