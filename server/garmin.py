@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from . import cache, demo, store
@@ -137,6 +138,30 @@ class GarminData:
             n = store.upsert(acts)
             store.mark_synced()
             return n
+
+    async def gpx(self, activity_id: int | str, tmp_dir: Path) -> str | None:
+        """The activity's GPX, as text. Returns None if Garmin has no file for it.
+
+        Deliberately *not* routed through `_call`: the response is a path to a
+        multi-megabyte file on disk, which would be worse than useless in the response
+        cache. The caller (the track backfill) simplifies it down to a few KB and stores
+        that instead, so the raw file is read once and deleted.
+        """
+        if is_demo() or self.mcp is None:
+            return None
+        res = await self.mcp.call(
+            "download_activity_file",
+            activity_id=int(activity_id),
+            format="gpx",
+            output_dir=str(tmp_dir),
+        )
+        path = Path(res["file_path"]) if isinstance(res, dict) and res.get("file_path") else None
+        if not path or not path.exists():
+            return None
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        finally:
+            path.unlink(missing_ok=True)
 
     async def activity(self, activity_id: int | str) -> dict | None:
         return await self._call("get_activity", ttl=_STABLE_TTL, activity_id=activity_id)

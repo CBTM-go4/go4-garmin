@@ -527,6 +527,33 @@ def yearly_history(runs: list[dict]) -> list[dict]:
     return out
 
 
+def daily_volume(runs: list[dict]) -> list[dict]:
+    """Per-calendar-day running totals, oldest first — the calendar heatmap's source.
+
+    Only days that were actually run appear; rest days are the absence of a row (the
+    grid draws every date anyway, so sending zeros would just inflate the payload).
+    Same 500 m glitch filter as `yearly_history`, so the two agree on what counts.
+    """
+    buckets: dict[str, dict] = {}
+    for r in runs:
+        d = _run_date(r)
+        if not d:
+            continue
+        meters = r.get("distance_meters") or 0
+        if meters < 500:
+            continue
+        b = buckets.setdefault(d.isoformat(), {"date": d.isoformat(), "runs": 0,
+                                               "km": 0.0, "minutes": 0.0})
+        b["runs"] += 1
+        b["km"] += meters / 1000
+        b["minutes"] += (r.get("duration_seconds") or 0) / 60
+    out = sorted(buckets.values(), key=lambda x: x["date"])
+    for b in out:
+        b["km"] = round(b["km"], 2)
+        b["minutes"] = round(b["minutes"])
+    return out
+
+
 def period_summary(runs: list[dict], hrmax: int) -> dict:
     """Window-local block summary for period-vs-period comparison.
 

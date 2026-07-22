@@ -84,6 +84,19 @@ def mark_synced() -> None:
         conn.commit()
 
 
+def names_by_id(ids: list[int]) -> dict[int, str]:
+    """Activity names for the given ids. Garmin names runs after their location, so the
+    route map uses these to label the places it finds."""
+    if not ids:
+        return {}
+    with _conn() as conn:
+        out = {}
+        for chunk in (ids[i:i + 400] for i in range(0, len(ids), 400)):   # stay under SQLite's var limit
+            q = f"SELECT id, name FROM activities WHERE id IN ({', '.join('?' for _ in chunk)})"
+            out.update({r[0]: r[1] or "" for r in conn.execute(q, chunk)})
+        return out
+
+
 def activities_between(start: date, end: date) -> list[dict]:
     """All stored activities whose calendar date falls in [start, end], newest first —
     matching the ordering the Garmin MCP returns."""

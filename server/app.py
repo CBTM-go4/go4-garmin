@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cache, coach, demo, history, metrics, races, store
+from . import cache, coach, demo, history, metrics, races, store, trackfill, tracks
 from .garmin import GarminData, is_demo
 from .mcp_client import GarminMCP
 
@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:  # noqa: BLE001
             log.warning("MCP failed to start: %s", e)
     app.state.gd = GarminData(mcp)
+    app.state.backfill = trackfill.Backfill()
     if is_demo():
         log.info("Running in DEMO mode (synthetic data)")
     elif mcp:
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
         # load backfills without blocking startup; subsequent reads are served locally.
         asyncio.create_task(_sync_store(app))
     yield
+    await app.state.backfill.stop()
     if mcp:
         await mcp.stop()
 
@@ -96,6 +98,8 @@ async def _sync_store(app: FastAPI) -> None:
         log.info("Activity store synced: %d activities written, %d total", n, store.count())
     except Exception as e:  # noqa: BLE001
         log.warning("Activity store sync failed: %s", e)
+    # Tracks are backfilled off the synced store, so this has to follow it.
+    app.state.backfill.start(app.state.gd)
 
 
 @app.get("/api/races")
@@ -238,17 +242,48 @@ async def history_years():
     today = date.today()
     past = await g.runs_between(HISTORY_START, date(today.year - 1, 12, 31), stable=True)
     current = await g.runs_between(date(today.year, 1, 1), today)
-    years = metrics.yearly_history(past + current)
+    runs = past + current
+    years = metrics.yearly_history(runs)
     return {
         "available": True,
         "demo": is_demo(),
         "years": years,
+        "days": metrics.daily_volume(runs),
         "totals": {
             "years": len(years),
             "runs": sum(y["runs"] for y in years),
             "km": round(sum(y["km"] for y in years), 1),
         },
     }
+
+
+@app.get("/api/tracks")
+async def route_tracks():
+    """Every stored GPS track as an encoded polyline, for the route heatmap.
+
+    The whole set ships in one response (a few MB for a decade) rather than per-tile or
+    per-viewport: the browser then pans and zooms with no further round trips, and the
+    heat is drawn from the same geometry at every zoom level.
+    """
+    rows = tracks.all_tracks()
+    # Garmin names a run after where it happened ("<Town> Running", "<City> Marathon"),
+    # which is the only place label available offline — the map uses the commonest name
+    # in a cluster of routes to name that cluster.
+    names = store.names_by_id([r["id"] for r in rows])
+    for r in rows:
+        r["name"] = names.get(r["id"]) or ""
+    return {
+        "demo": is_demo(),
+        "bounds": tracks.bounds(),
+        "tracks": rows,
+        "backfill": app.state.backfill.status(),
+    }
+
+
+@app.get("/api/tracks/status")
+async def route_tracks_status():
+    """Backfill progress only — polled while the sweep is still running."""
+    return app.state.backfill.status()
 
 
 # Runs at/above this distance feed the long-run durability trend.

@@ -44,6 +44,8 @@ const HELP = {
   'Race Predictions': 'Three estimates side by side. Realistic = Daniels VDOT from your best actual effort (only what you’ve demonstrated). HR-based = your pace-vs-HR profile read at threshold HR — reliable only if your faster runs are your higher-HR ones (heat/hills distort it). Garmin = its VO₂max estimate (tends optimistic). Longer distances assume you’ve done the endurance work.',
   'Sleep': 'Last night’s sleep score and stage breakdown (deep / REM / light), plus your recent nightly duration. Deep and REM drive physical and mental recovery; aim for consistency.',
   'Body Battery': 'Garmin’s daily energy model. “Charged” is how much you recovered (mostly overnight), “drained” is how much activity and stress spent — net positive days leave you fresher.',
+  'Training Calendar': 'Every day of the year, shaded by how far you ran — the deeper the blue, the further you ran; grey is a rest day. The shades run from that year’s shortest run to its longest, so the darkest cell is always the year’s longest run — and the legend shows what each shade is worth in km for the year on show. Read it for consistency: gaps, streaks and the rhythm of your week are easier to see here than in any chart.',
+  'Route Heatmap': 'Every GPS track you have recorded, drawn on top of itself — no street map underneath, because with enough runs the routes *are* the map. Each track is stroked faintly, so the strength of a road’s colour is how often you have run it: your daily loop glows, a one-off route stays dim. Drag to pan, scroll to zoom, and filter by year to see how your territory has moved.',
   'Fitness Trend': 'Your fitness trajectory over time — VO₂max (Garmin computes it only on some run days, so points are sparse) and predicted race times shown as % faster/slower than the earliest point (up = faster; hover for the actual time). Direction over weeks matters more than any single point.',
 };
 
@@ -288,6 +290,448 @@ function renderNotAuthed(app, data) {
   ]));
 }
 
+// ---------- training calendar heatmap ----------
+// One column per week (Monday on top), one cell per day, shaded by that day's distance.
+// Sequential single-hue blue ramp; its steps are chosen per colour scheme in the CSS.
+const HEAT_RAMP = ['--heat-1', '--heat-2', '--heat-3', '--heat-4', '--heat-5', '--heat-6', '--heat-7'];
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const dowIndex = d => (d.getDay() + 6) % 7;                 // Monday = 0
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
+// The shades span each year's own shortest→longest run, so the darkest cell is always that
+// year's longest — and running a 42 km in December rescales the whole year behind it.
+//
+// The mapping is on √km, not km. Straight-line shading would put a lone marathon at the
+// dark end and squash a year's worth of 5–12 km runs into the palest step or two; the
+// square root compresses the long tail so the everyday runs still spread across the ramp
+// while the outlier keeps the top step to itself. (Quantiles, the other option, do the
+// opposite damage: they space the bulk nicely but lump every long run into one shade.)
+function heatScale(kms) {
+  const lo = kms.length ? Math.sqrt(Math.min(...kms)) : 0;
+  const hi = kms.length ? Math.sqrt(Math.max(...kms)) : 0;
+  const n = HEAT_RAMP.length;
+  const flat = hi - lo < 0.05;                    // one run, or a year of identical ones
+  return {
+    level: km => flat ? n - 1
+      : Math.min(n - 1, Math.max(0, Math.floor((Math.sqrt(km) - lo) / (hi - lo) * n))),
+    // Where each shade gives way to the next, back in km — the legend's tick values.
+    edges: flat ? [] : [...Array(n - 1)].map((_, i) => (lo + (hi - lo) * (i + 1) / n) ** 2),
+  };
+}
+const kmTick = v => v >= 10 ? String(Math.round(v)) : v.toFixed(1);
+
+function heatmapCard(days, availableYears) {
+  const byDate = Object.fromEntries(days.map(x => [x.date, x]));
+  let year = availableYears[0];
+  const card = h('div', { class: 'card' }, [
+    h('div', { class: 'chart-title' }, [
+      h('h3', {}, 'Training Calendar'),
+      h('span', { class: 'hint' }, 'darker = further, scaled to this year · click a day to open that week'),
+    ]),
+  ]);
+  addHelp(card.querySelector('h3'), HELP['Training Calendar']);
+  const seg = h('div', { class: 'seg years' }, availableYears.map(y =>
+    h('button', { 'data-year': y, class: y === year ? 'active' : '' }, String(y))));
+  const body = h('div');
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    year = +b.dataset.year;
+    [...seg.children].forEach(c => c.classList.toggle('active', +c.dataset.year === year));
+    body.replaceChildren(calendarHeatmap(year, byDate));
+  });
+  body.append(calendarHeatmap(year, byDate));
+  card.append(seg, body);
+  return card;
+}
+
+function calendarHeatmap(year, byDate) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const jan1 = new Date(year, 0, 1), dec31 = new Date(year, 11, 31);
+  const start = addDays(jan1, -dowIndex(jan1));                       // back to a Monday
+  const weeks = Math.ceil(((dec31 - start) / 86400000 + 1) / 7);
+
+  const inYear = Object.values(byDate).filter(v => +v.date.slice(0, 4) === year);
+  const scale = heatScale(inYear.map(v => v.km));
+
+  const grid = h('div', { class: 'heat-grid' });
+  let lastCell = null;                                               // the most recent real day
+  for (let w = 0; w < weeks; w++) {
+    for (let dw = 0; dw < 7; dw++) {
+      const date = addDays(start, w * 7 + dw);
+      if (date.getFullYear() !== year || date > today) { grid.append(h('div', { class: 'heat-cell void' })); continue; }
+      const iso = isoDay(date), v = byDate[iso];
+      const label = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      const cell = h('div', {
+        class: 'heat-cell' + (v ? '' : ' rest'),
+        title: v ? `${label} — ${v.km.toFixed(1)} km` : `${label} — rest`,
+      });
+      if (v) cell.style.background = `var(${HEAT_RAMP[scale.level(v.km)]})`;
+      const tip = v
+        ? `<b>${v.km.toFixed(1)} km</b> · ${fmtDur(v.minutes * 60)}<br>${label}${v.runs > 1 ? ` · ${v.runs} runs` : ''}`
+        : `<b>Rest</b><br>${label}`;
+      cell.addEventListener('mouseenter', ev => showTip(tip, ev.clientX, ev.clientY));
+      cell.addEventListener('mousemove', ev => showTip(tip, ev.clientX, ev.clientY));
+      cell.addEventListener('mouseleave', hideTip);
+      cell.addEventListener('click', () => {                          // the containing Mon–Sun week
+        const mon = addDays(date, -dowIndex(date));
+        state.start = isoDay(mon); state.end = isoDay(addDays(mon, 6));
+        switchView('dashboard');
+      });
+      grid.append(cell);
+      lastCell = cell;
+    }
+  }
+
+  // Month labels sit above the column their 1st falls in.
+  const months = h('div', { class: 'heat-months' });
+  MONTHS.forEach((m, i) => {
+    const first = new Date(year, i, 1);
+    const col = Math.floor((first - start) / 86400000 / 7) + 1;
+    months.append(h('span', { style: `grid-column:${col}` }, m));
+  });
+  months.style.gridTemplateColumns = `repeat(${weeks}, var(--heat-cell))`;
+  grid.style.gridTemplateColumns = `repeat(${weeks}, var(--heat-cell))`;
+
+  const kmTot = inYear.reduce((a, v) => a + v.km, 0);
+  const scroll = h('div', { class: 'heat-scroll' }, [months, grid]);
+  // On a narrow screen the year overflows: for the year in progress, open on the most
+  // recent weeks (today at the right edge) rather than on January.
+  if (year === today.getFullYear() && lastCell) requestAnimationFrame(() => {
+    scroll.scrollLeft = Math.max(0, lastCell.offsetLeft + lastCell.offsetWidth - scroll.clientWidth);
+  });
+  return h('div', {}, [
+    h('div', { class: 'heat' }, [
+      h('div', { class: 'heat-dows' }, DOW.map((d, i) => h('span', {}, i % 2 === 0 ? d : ''))),
+      scroll,
+    ]),
+    h('div', { class: 'heat-foot' }, [
+      h('span', { class: 'muted' }, `${inYear.length} run days · ${Math.round(kmTot).toLocaleString()} km · longest streak ${heatStreak(inYear)} days`),
+      h('span', { class: 'spacer' }),
+      heatLegend(scale),
+    ]),
+  ]);
+}
+
+// The ramp with its boundaries ticked underneath in km, so a shade can be read back as a
+// distance without hovering. Each tick sits at the right edge of the shade it closes, and
+// the values move with the year on show.
+function heatLegend(scale) {
+  const swatches = HEAT_RAMP.map((v, i) => {
+    const lo = i === 0 ? null : scale.edges[i - 1], hi = scale.edges[i];
+    const e = h('i', {
+      title: !scale.edges.length ? 'every run this year'
+        : lo == null ? `under ${kmTick(hi)} km`
+        : hi == null ? `${kmTick(lo)} km and up`
+        : `${kmTick(lo)}–${kmTick(hi)} km`,
+    });
+    e.style.background = `var(${v})`;
+    return e;
+  });
+  return h('span', { class: 'heat-legend' }, [
+    h('i', { class: 'rest', title: 'rest day' }),
+    h('span', { class: 'muted' }, 'rest'),
+    h('span', { class: 'heat-key' }, [
+      h('span', { class: 'heat-scale' }, swatches),
+      h('span', { class: 'heat-ticks' }, scale.edges.map(e => h('span', {}, kmTick(e))).concat(h('span', {}, 'km'))),
+    ]),
+  ]);
+}
+
+// Longest run of consecutive days with a run — the consistency number the grid shows visually.
+function heatStreak(entries) {
+  const set = new Set(entries.map(e => e.date));
+  let best = 0;
+  for (const e of entries) {
+    const prev = isoDay(addDays(new Date(e.date + 'T00:00:00'), -1));
+    if (set.has(prev)) continue;                       // only count from a streak's first day
+    let n = 0, d = new Date(e.date + 'T00:00:00');
+    while (set.has(isoDay(d))) { n++; d = addDays(d, 1); }
+    best = Math.max(best, n);
+  }
+  return best;
+}
+
+// ---------- route heatmap (every GPS track, drawn on top of itself) ----------
+// No basemap and no tiles: the routes are the map. Each track is stroked at low opacity
+// with a blending mode that accumulates, so a road run 200 times burns in and a one-off
+// detour stays faint — the same "repetition becomes colour" idea as the calendar, in space
+// instead of time.
+const prefersDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+const mapState = { z: 0, cx: 0, cy: 0, year: 'all', place: 0, tracks: [], places: [], canvas: null };
+
+// Group routes into the places they happened. Without a geocoder (and this page has no
+// network access beyond its own backend) the labels come from Garmin itself, which names
+// a run after where you ran it — so the commonest activity name in a cluster names it.
+const PLACE_GRID = 0.25;      // ~25 km buckets: one town, not one suburb
+
+function findPlaces(ts) {
+  const buckets = new Map();
+  for (const t of ts) {
+    const [la, lo] = t.pts[0];
+    const key = `${Math.round(la / PLACE_GRID)}|${Math.round(lo / PLACE_GRID)}`;
+    (buckets.get(key) || buckets.set(key, []).get(key)).push(t);
+  }
+  return [...buckets.values()]
+    .sort((a, b) => b.length - a.length)
+    .map(ts => ({ label: placeName(ts), n: ts.length, ids: new Set(ts.map(t => t.id)) }));
+}
+
+// Strip the activity-type noise Garmin appends so "<Town> Running" reads as a place.
+function placeName(ts) {
+  const tally = new Map();
+  for (const t of ts) {
+    const n = (t.name || '').replace(/\s*(running|run|walking|hiking|cycling)\s*$/i, '').trim();
+    if (n) tally.set(n, (tally.get(n) || 0) + 1);
+  }
+  const best = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0].slice(0, 22) : 'Elsewhere';
+}
+
+// Google encoded polyline → [[lat, lon], …]. The server ships tracks in this format
+// because it costs ~2 bytes a point instead of ~40 as JSON.
+function decodePolyline(str) {
+  const pts = []; let i = 0, lat = 0, lon = 0;
+  while (i < str.length) {
+    for (let k = 0; k < 2; k++) {
+      let r = 0, sh = 0, b;
+      do { b = str.charCodeAt(i++) - 63; r |= (b & 0x1f) << sh; sh += 5; } while (b >= 0x20);
+      const d = (r & 1) ? ~(r >> 1) : (r >> 1);
+      if (k === 0) lat += d; else lon += d;
+    }
+    pts.push([lat / 1e5, lon / 1e5]);
+  }
+  return pts;
+}
+
+// Web Mercator in "world units" (one unit = the whole world at zoom 0), so zooming is a
+// single scale factor and latitude distortion is handled once, here.
+const mercX = lon => (lon + 180) / 360;
+const mercY = lat => {
+  const s = Math.sin(lat * Math.PI / 180);
+  return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+};
+
+async function loadMap() {
+  const app = $('#app');
+  app.innerHTML = '<div class="loading">Loading your routes…</div>';
+  let d;
+  try { d = await (await fetch('/api/tracks')).json(); }
+  catch (e) { app.innerHTML = `<div class="banner"><h2>Backend unreachable</h2><div class="muted">${e}</div></div>`; return; }
+  $('#demoBadge').style.display = d.demo ? '' : 'none';
+  renderMap(app, d);
+}
+
+function renderMap(app, d) {
+  app.innerHTML = '';
+  const bf = d.backfill || {};
+  const years = [...new Set(d.tracks.map(t => t.date.slice(0, 4)))].sort().reverse();
+  mapState.tracks = d.tracks.map(t => ({ ...t, pts: decodePolyline(t.p) }));
+  mapState.places = findPlaces(mapState.tracks.filter(t => t.pts.length));
+  mapState.year = years.includes(mapState.year) ? mapState.year : 'all';
+  if (mapState.place !== 'all' && !mapState.places[mapState.place]) mapState.place = 0;
+
+  if (!d.tracks.length) {
+    app.append(h('div', { class: 'banner' }, [
+      h('h2', {}, bf.running ? 'Fetching your routes…' : 'No GPS tracks yet'),
+      h('div', { class: 'muted' }, bf.running
+        ? `Garmin keeps coordinates in the activity file, not the activity list, so each run has to be downloaded once. ${bf.done} of ${bf.total} done — this page fills in as they arrive.`
+        : 'Tracks are downloaded in the background once your activity store has synced. Try again shortly.'),
+    ]));
+    if (bf.running) setTimeout(() => { if (state.view === 'map') loadMap(); }, 8000);
+    return;
+  }
+
+  const card = h('div', { class: 'card' }, [
+    h('div', { class: 'chart-title' }, [
+      h('h3', {}, 'Route Heatmap'),
+      // Light theme strokes multiply down, dark theme adds up, so the word for "ran it
+      // often" is literally the opposite in each — say the one the reader is looking at.
+      h('span', { class: 'hint' }, `${prefersDark() ? 'brighter' : 'darker'} = run more often · drag to pan, scroll to zoom`),
+    ]),
+  ]);
+  addHelp(card.querySelector('h3'), HELP['Route Heatmap']);
+
+  const seg = h('div', { class: 'seg years' },
+    [h('button', { 'data-year': 'all', class: mapState.year === 'all' ? 'active' : '' }, 'All time'),
+     ...years.map(y => h('button', { 'data-year': y, class: mapState.year === y ? 'active' : '' }, y))]);
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    mapState.year = b.dataset.year;
+    [...seg.children].forEach(c => c.classList.toggle('active', c.dataset.year === mapState.year));
+    fitMap(); drawMap(); updateMapFoot(foot);
+  });
+
+  // Places you've run, biggest first. Without this, one holiday run 900 km away zooms the
+  // whole map out until every route is a dot.
+  const placeSeg = h('div', { class: 'seg places' },
+    [...mapState.places.slice(0, 7).map((p, i) =>
+       h('button', { 'data-place': i, class: mapState.place === i ? 'active' : '', title: `${p.n} runs` }, p.label)),
+     h('button', { 'data-place': 'all', class: mapState.place === 'all' ? 'active' : '' }, 'Everywhere')]);
+  placeSeg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    mapState.place = b.dataset.place === 'all' ? 'all' : +b.dataset.place;
+    [...placeSeg.children].forEach(c => c.classList.toggle('active', String(mapState.place) === c.dataset.place));
+    fitMap(); drawMap(); updateMapFoot(foot);
+  });
+
+  const canvas = h('canvas', { class: 'routemap' });
+  mapState.canvas = canvas;
+  const wrap = h('div', { class: 'map-wrap' }, [
+    canvas,
+    h('div', { class: 'map-ctrls' }, [
+      h('button', { class: 'btn', title: 'Zoom in' }, '+'),
+      h('button', { class: 'btn', title: 'Zoom out' }, '–'),
+      h('button', { class: 'btn', title: 'Fit all routes' }, '⤢'),
+    ]),
+  ]);
+  const [zin, zout, zfit] = wrap.querySelectorAll('.map-ctrls button');
+  zin.onclick = () => { mapState.z *= 1.6; drawMap(); updateMapFoot(foot); };
+  zout.onclick = () => { mapState.z /= 1.6; drawMap(); updateMapFoot(foot); };
+  zfit.onclick = () => { fitMap(); drawMap(); updateMapFoot(foot); };
+
+  const foot = h('div', { class: 'heat-foot' });
+  card.append(placeSeg, seg, wrap, foot);
+  app.append(card);
+  if (bf.running) app.append(backfillNote(bf));
+
+  wireMapPointer(canvas, foot);
+  requestAnimationFrame(() => { fitMap(); drawMap(); updateMapFoot(foot); });
+  addEventListener('resize', () => { if (state.view === 'map') { drawMap(); } }, { passive: true });
+}
+
+// Progress strip while the one-time download sweep is still running; it re-polls and
+// reloads the view so routes appear as they land.
+function backfillNote(bf) {
+  const pct = bf.total ? Math.round(100 * bf.done / bf.total) : 0;
+  const note = h('div', { class: 'rangebar' },
+    `Downloading route files — ${bf.done} of ${bf.total} runs (${pct}%). Newest years first; the map fills in as they arrive.`);
+  setTimeout(() => { if (state.view === 'map') loadMap(); }, 15000);
+  return note;
+}
+
+function visibleTracks() {
+  const place = mapState.place === 'all' ? null : mapState.places[mapState.place];
+  return mapState.tracks.filter(t =>
+    (mapState.year === 'all' || t.date.startsWith(mapState.year)) &&
+    (!place || place.ids.has(t.id)));
+}
+
+// Fit the visible routes into the canvas with a small margin.
+function fitMap() {
+  const ts = visibleTracks();
+  if (!ts.length) return;
+  let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
+  for (const t of ts) for (const [la, lo] of t.pts) {
+    const x = mercX(lo), y = mercY(la);
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  const c = mapState.canvas, w = c.clientWidth, hgt = c.clientHeight;
+  mapState.z = 0.9 * Math.min(w / Math.max(x1 - x0, 1e-6), hgt / Math.max(y1 - y0, 1e-6));
+  mapState.cx = (x0 + x1) / 2;
+  mapState.cy = (y0 + y1) / 2;
+}
+
+function drawMap() {
+  const c = mapState.canvas;
+  if (!c) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = c.clientWidth, hgt = c.clientHeight;
+  c.width = w * dpr; c.height = hgt * dpr;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // The canvas carries its own ground rather than inheriting the page surface: additive
+  // blending needs somewhere dark to accumulate, and subtractive needs somewhere light.
+  const dark = prefersDark();
+  ctx.fillStyle = dark ? '#0c1118' : '#ffffff';
+  ctx.fillRect(0, 0, w, hgt);
+
+  // Dark: strokes add toward white-hot. Light: strokes multiply down toward deep blue —
+  // so in both themes, more running = further from the background.
+  ctx.globalCompositeOperation = dark ? 'lighter' : 'multiply';
+  ctx.strokeStyle = dark ? 'rgba(64,132,222,0.30)' : 'rgba(120,170,225,0.55)';
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = ctx.lineCap = 'round';
+
+  const { z, cx, cy } = mapState;
+  const px = x => (x - cx) * z + w / 2;
+  const py = y => (y - cy) * z + hgt / 2;
+  for (const t of visibleTracks()) {
+    ctx.beginPath();
+    let started = false;
+    for (const [la, lo] of t.pts) {
+      const x = px(mercX(lo)), y = py(mercY(la));
+      if (x < -2000 || x > w + 2000 || y < -2000 || y > hgt + 2000) { started = false; continue; }
+      if (started) ctx.lineTo(x, y); else { ctx.moveTo(x, y); started = true; }
+    }
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  drawScaleBar(ctx, w, hgt, dark);
+}
+
+// A map without a scale is unreadable — this is the one piece of chrome the render needs.
+function drawScaleBar(ctx, w, hgt, dark) {
+  const lat = mapState.cy;                       // world-y → latitude, for metres/pixel
+  const latDeg = (2 * Math.atan(Math.exp((0.5 - lat) * 2 * Math.PI)) - Math.PI / 2) * 180 / Math.PI;
+  const mPerPx = 40075016.686 * Math.cos(latDeg * Math.PI / 180) / mapState.z;
+  const targets = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
+  const target = targets.find(t => t / mPerPx > 60) || targets[targets.length - 1];
+  const len = target / mPerPx;
+  const x = 14, y = hgt - 18;
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,.55)' : 'rgba(11,11,11,.45)';
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 4); ctx.lineTo(x, y); ctx.lineTo(x + len, y); ctx.lineTo(x + len, y - 4);
+  ctx.stroke();
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText(target >= 1000 ? `${target / 1000} km` : `${target} m`, x + len + 6, y + 1);
+}
+
+function updateMapFoot(foot) {
+  const ts = visibleTracks();
+  const km = ts.reduce((a, t) => a + t.n * 0.015, 0);   // ~15 m between stored points
+  foot.replaceChildren(
+    h('span', { class: 'muted' },
+      `${ts.length.toLocaleString()} route${ts.length === 1 ? '' : 's'} · ~${Math.round(km).toLocaleString()} km of GPS`),
+    h('span', { class: 'spacer' }),
+    h('span', { class: 'muted' }, `${prefersDark() ? 'brightness' : 'depth of colour'} = how often you ran there`));
+}
+
+// Drag to pan, wheel to zoom about the cursor.
+function wireMapPointer(canvas, foot) {
+  let dragging = false, lx = 0, ly = 0;
+  canvas.addEventListener('pointerdown', e => {
+    dragging = true; lx = e.clientX; ly = e.clientY;
+    canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging');
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    mapState.cx -= (e.clientX - lx) / mapState.z;
+    mapState.cy -= (e.clientY - ly) / mapState.z;
+    lx = e.clientX; ly = e.clientY;
+    drawMap();
+  });
+  const end = e => { dragging = false; canvas.classList.remove('dragging'); };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left - r.width / 2, my = e.clientY - r.top - r.height / 2;
+    const f = Math.exp(-e.deltaY * 0.0015);
+    // Keep the point under the cursor fixed while the scale changes.
+    mapState.cx += mx / mapState.z - mx / (mapState.z * f);
+    mapState.cy += my / mapState.z - my / (mapState.z * f);
+    mapState.z *= f;
+    drawMap(); updateMapFoot(foot);
+  }, { passive: false });
+  canvas.addEventListener('dblclick', () => { mapState.z *= 1.6; drawMap(); updateMapFoot(foot); });
+}
+
 // ---------- history view (per-year totals across the whole record) ----------
 async function loadHistory() {
   const app = $('#app');
@@ -306,6 +750,7 @@ function renderHistory(app, d) {
   const tot = d.totals || {};
   app.append(h('div', { class: 'rangebar' },
     `${tot.years ?? years.length} years · ${(tot.runs ?? 0).toLocaleString()} runs · ${Math.round(tot.km ?? 0).toLocaleString()} km all-time`));
+  if (years.length) app.append(heatmapCard(d.days || [], years.map(y => y.year)));
 
   const card = h('div', { class: 'card' }, [
     h('div', { class: 'chart-title' }, [h('h3', {}, 'Running History'), h('span', { class: 'hint' }, 'by calendar year · click a year to view it')]),
@@ -972,7 +1417,7 @@ function syncUrl() {
 
 // Switch between Dashboard, Goal Races and History. The range controls only apply to
 // the dashboard, so they're hidden on the other views.
-const VIEW_LOADERS = { dashboard: load, races: loadRaces, history: loadHistory };
+const VIEW_LOADERS = { dashboard: load, races: loadRaces, history: loadHistory, map: loadMap };
 function switchView(v) {
   state.view = v;
   [...$('#tabs').children].forEach(b => b.classList.toggle('active', b.dataset.view === v));
@@ -1035,6 +1480,6 @@ $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refre
   for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
   reflectControls();
   const view = p.get('view');
-  if (view === 'history' || view === 'races') switchView(view);
+  if (view === 'history' || view === 'races' || view === 'map') switchView(view);
   else load();
 })();
