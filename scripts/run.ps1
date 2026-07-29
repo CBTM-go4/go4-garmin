@@ -15,7 +15,7 @@ Set-Location $root
 
 if ($Auth) {
   Write-Host "Launching one-time Garmin authentication (saves token to ~/.garminconnect)..." -ForegroundColor Cyan
-  uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+  uvx --python 3.12 --with "mcp<2" --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
   exit $LASTEXITCODE
 }
 

@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 
 if [[ "${1:-}" == "--auth" ]]; then
   echo "Launching one-time Garmin authentication (token -> ~/.garminconnect)..."
-  exec uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+  exec uvx --python 3.12 --with "mcp<2" --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
 fi
 
 if [[ "${1:-}" == "--demo" ]]; then export GARMIN_COACH_DEMO=1; else unset GARMIN_COACH_DEMO; fi

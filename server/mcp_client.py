@@ -41,6 +41,9 @@ def _server_params() -> StdioServerParameters:
         command = "uvx"
         args = [
             "--python", "3.12",
+            # garmin_mcp imports mcp.server.fastmcp, which the 2.x SDK dropped;
+            # without this uvx resolves the latest and the server dies on import.
+            "--with", "mcp<2",
             "--from", "git+https://github.com/Taxuspt/garmin_mcp",
             "garmin-mcp",
         ]
@@ -169,9 +172,11 @@ def _friendly_error(e: Exception) -> str:
     joined = " | ".join(_flatten(e)).lower()
     if "connection closed" in joined or "closed" in joined or "exiting" in joined:
         return (
-            "Garmin MCP server exited on startup — most likely you are not "
-            "authenticated yet. Run once:  uvx --from "
+            "Garmin MCP server exited on startup. Either you are not authenticated "
+            "yet — run once:  uvx --python 3.12 --with \"mcp<2\" --from "
             "git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth   "
-            "(enter your Garmin email/password + MFA code), then restart the backend."
+            "(enter your Garmin email/password + MFA code) — or it failed to import. "
+            "Check the traceback above the warning: garmin_mcp needs the 1.x MCP SDK, "
+            "hence the mcp<2 pin. Then restart the backend."
         )
     return str(e) or e.__class__.__name__

@@ -44,6 +44,13 @@ Garmin Connect ── MCP ──▶ FastAPI backend ──▶ SQLite cache ─�
 > that broke the old `garth`-based login. This project pins
 > `garminconnect >= 0.3.6`, whose native `curl_cffi` engine works around it.
 
+> **MCP SDK note (2026):** `garmin_mcp` imports `mcp.server.fastmcp`, which the 2.x
+> MCP SDK dropped (it's `mcp.server.mcpserver.MCPServer` now). Every `uvx` invocation
+> here therefore passes `--with "mcp<2"` — without it `uvx` resolves the latest SDK and
+> the server dies at import with `ModuleNotFoundError: No module named
+> 'mcp.server.fastmcp'`. This surfaces in the app as a misleading *"not authenticated"*
+> warning, so check the traceback above it before re-running auth.
+
 ## Setup
 
 Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.12+.
@@ -70,7 +77,7 @@ Authenticate once (handles MFA; saves a token to `~/.garminconnect`):
 ```bash
 ./scripts/run.sh --auth
 # or directly:
-uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+uvx --python 3.12 --with "mcp<2" --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
 ```
 
 Then start the app (it launches the MCP for you):
@@ -94,7 +101,7 @@ Open Claude Code in this folder, approve the `garmin` server, and ask things lik
 - *"Plan my next 7 days around Saturday's race."*
 
 (If it hasn't picked up the config, run `claude mcp add garmin -- uvx --python 3.12
---from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp`.)
+--with "mcp<2" --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp`.)
 
 ## API
 
