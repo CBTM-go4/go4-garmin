@@ -196,10 +196,23 @@ def test_decoupling_needs_four_laps():
 
 
 # ---- normalisers ---------------------------------------------------------
-def test_weather_fahrenheit_to_celsius():
+def test_weather_legacy_fahrenheit_to_celsius():
+    # Old garmin_mcp shape: '..._celsius' keys that actually carried °F.
     assert m.weather_norm({"temperature_celsius": 50})["temp_c"] == 10
     assert m.weather_norm({"temperature_celsius": 32})["temp_c"] == 0
     assert m.weather_norm({}) is None
+
+
+def test_weather_current_shape_respects_unit():
+    # Current shape: already converted, unit stated.
+    w = m.weather_norm({"temperature": 22.8, "temperature_unit": "C",
+                        "apparent_temperature": 24.2, "humidity_percent": 20})
+    assert w["temp_c"] == 23 and w["feels_c"] == 24 and w["humidity"] == 20
+    # A statute_us account keeps °F, so it still needs converting.
+    assert m.weather_norm({"temperature": 50, "temperature_unit": "F"})["temp_c"] == 10
+    # Unit absent → assume already °C rather than mangling it.
+    assert m.weather_norm({"temperature": 12})["temp_c"] == 12
+    assert m.weather_norm({"temperature": None, "temperature_unit": "C"}) is None
 
 
 def test_sleep_norm():

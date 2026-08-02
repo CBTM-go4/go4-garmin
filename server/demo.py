@@ -154,13 +154,15 @@ def call(tool: str, args: dict[str, Any]) -> Any:
         r = _by_id(args["activity_id"])
         if not r:
             return None
-        # Garmin reports °F; synthesize a plausible morning temp that way (warmer on
-        # the hotter/higher-decoupling long runs) so the °F→°C conversion is exercised.
+        # Match garmin_mcp's current shape: 'temperature' in the account's display
+        # unit, tagged by 'temperature_unit'. Warmer on the hotter/higher-decoupling
+        # long runs.
         rng = random.Random(r["id"])
-        f = 48 + rng.randint(0, 22) + (14 if r["km"] > 16 else 0)
-        return {"activity_id": r["id"], "temperature_celsius": f,
-                "apparent_temperature_celsius": f + rng.randint(-1, 4),
-                "humidity_percent": rng.randint(40, 80), "wind_speed_mps": rng.randint(0, 5)}
+        c = 9 + rng.randint(0, 12) + (8 if r["km"] > 16 else 0)
+        return {"activity_id": r["id"], "temperature": c, "temperature_unit": "C",
+                "apparent_temperature": c + rng.randint(-1, 2),
+                "humidity_percent": rng.randint(40, 80), "wind_speed": rng.randint(0, 18),
+                "wind_speed_unit": "km/h"}
 
     if tool == "get_training_status":
         d = date.fromisoformat(args["date"])

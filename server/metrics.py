@@ -458,20 +458,35 @@ def sleep_norm(s: Any) -> dict | None:
 
 
 def weather_norm(w: Any) -> dict | None:
-    """Normalize get_activity_weather. Garmin returns temps in °F despite the field
-    name ('..._celsius'), so convert to °C for this metric account."""
+    """Normalize get_activity_weather to °C.
+
+    Two payload shapes exist. Current garmin_mcp returns 'temperature' already in the
+    account's display unit, tagged by 'temperature_unit' ("C" or "F"). Older builds
+    returned 'temperature_celsius' — misnamed, the value was really °F straight from
+    Garmin's weather station. Handle both so the runs table keeps its Temp column.
+    """
     if not isinstance(w, dict):
         return None
 
     def f2c(v):
         return round((v - 32) * 5 / 9) if isinstance(v, (int, float)) else None
 
-    t = f2c(w.get("temperature_celsius"))
+    def as_is(v):
+        return round(v) if isinstance(v, (int, float)) else None
+
+    if "temperature" in w:
+        conv = f2c if str(w.get("temperature_unit", "C")).upper().startswith("F") else as_is
+        raw_t, raw_feels = w.get("temperature"), w.get("apparent_temperature")
+    else:
+        conv = f2c
+        raw_t, raw_feels = w.get("temperature_celsius"), w.get("apparent_temperature_celsius")
+
+    t = conv(raw_t)
     if t is None:
         return None
     return {
         "temp_c": t,
-        "feels_c": f2c(w.get("apparent_temperature_celsius")),
+        "feels_c": conv(raw_feels),
         "humidity": w.get("humidity_percent"),
     }
 
