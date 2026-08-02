@@ -215,6 +215,60 @@ def test_weather_current_shape_respects_unit():
     assert m.weather_norm({"temperature": None, "temperature_unit": "C"}) is None
 
 
+def _fit(**stats):
+    return {"session": {"sport": "running", "temperature_stats": stats}}
+
+
+def test_fit_temperature_golden():
+    # Real numbers from the 2 Aug 2026 18 km long run (activity 23822063425).
+    t = m.fit_temperature(_fit(
+        avg_temp_c=25.1, min_temp_c=21, max_temp_c=30, temp_range_c=9,
+        avg_hr_coolest_third_bpm=137.5, avg_hr_hottest_third_bpm=149.1,
+        avg_power_coolest_third_w=196.9, avg_power_hottest_third_w=192.4))
+    assert (t["min_c"], t["max_c"], t["range_c"]) == (21.0, 30.0, 9.0)
+    assert t["hr_delta_bpm"] == 11.6
+    assert t["power_delta_pct"] == -2.3          # less work done in the heat
+    assert t["heat_drift_pct"] == 11.0           # beats-per-watt cost of the heat
+    assert t["heat_driven"] is True
+
+
+def test_fit_temperature_not_heat_when_power_rises():
+    # HR up because the run got harder, not hotter — power climbed with it.
+    t = m.fit_temperature(_fit(
+        min_temp_c=20, max_temp_c=26, temp_range_c=6,
+        avg_hr_coolest_third_bpm=140, avg_hr_hottest_third_bpm=155,
+        avg_power_coolest_third_w=190, avg_power_hottest_third_w=215))
+    assert t["hr_delta_bpm"] == 15.0
+    assert t["power_delta_pct"] == 13.2
+    assert t["heat_driven"] is False
+
+
+def test_fit_temperature_not_heat_on_a_steady_temperature():
+    t = m.fit_temperature(_fit(
+        min_temp_c=14, max_temp_c=16, temp_range_c=2,
+        avg_hr_coolest_third_bpm=140, avg_hr_hottest_third_bpm=152,
+        avg_power_coolest_third_w=190, avg_power_hottest_third_w=188))
+    assert t["heat_driven"] is False             # only 2°C — something else drove it
+
+
+def test_fit_temperature_derives_range_and_survives_missing_power():
+    t = m.fit_temperature(_fit(
+        min_temp_c=18, max_temp_c=27,            # no temp_range_c supplied
+        avg_hr_coolest_third_bpm=132, avg_hr_hottest_third_bpm=145))
+    assert t["range_c"] == 9.0
+    assert t["hr_delta_bpm"] == 13.0
+    assert t["heat_drift_pct"] is None           # can't cost it without power
+    assert t["heat_driven"] is False             # ...so never claimed as heat-driven
+
+
+def test_fit_temperature_none_without_stats():
+    assert m.fit_temperature(None) is None
+    assert m.fit_temperature({}) is None
+    assert m.fit_temperature({"session": {}}) is None
+    assert m.fit_temperature(_fit()) is None
+    assert m.fit_temperature(_fit(avg_temp_c=None)) is None
+
+
 def test_sleep_norm():
     s = m.sleep_norm({"sleep_seconds": 27000, "sleep_score": 82,
                       "sleep_score_qualifier": "very_good", "deep_sleep_seconds": 3600})

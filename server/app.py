@@ -439,12 +439,20 @@ async def run_detail(activity_id: str):
     splits = await g.activity_splits(activity_id)
     hr_zones = await g.activity_hr_zones(activity_id)
     weather = metrics.weather_norm(await g.activity_weather(activity_id))
+    # Supplementary, and not every activity has a FIT file worth parsing — never let it
+    # take the whole modal down with it.
+    try:
+        fit = await g.activity_fit_data(activity_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("No FIT data for %s: %s", activity_id, e)
+        fit = None
     return {
         "activity": activity,
         "splits": metrics._laps(splits),
         "decoupling": metrics.decoupling(splits),
         "zone_distribution": metrics.run_zone_distribution(hr_zones),
         "weather": weather,
+        "temperature": metrics.fit_temperature(fit),
     }
 
 

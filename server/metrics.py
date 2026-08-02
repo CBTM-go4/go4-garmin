@@ -491,6 +491,73 @@ def weather_norm(w: Any) -> dict | None:
     }
 
 
+def fit_temperature(fit: Any) -> dict | None:
+    """In-run temperature — and what it cost you — from the FIT file.
+
+    `weather_norm` above reads get_activity_weather, which is a single observation
+    stamped at the activity *start*. On a long run that heats up underneath you it
+    describes the first minute and nothing else. The watch logs temperature for the
+    whole activity; garmin_mcp summarises it as session.temperature_stats, including
+    average HR and power over the coolest and hottest thirds of the run.
+
+    Those thirds are what makes this diagnostic rather than trivia. Power is
+    pace-independent — it doesn't care about wind, gradient or stride — so HR rising
+    while power holds flat or falls means the extra heartbeats bought no extra work.
+    That is thermal drift, not fatigue or under-fuelling. Expressed as beats-per-watt
+    the change is directly comparable with `decoupling`'s Pa:HR figure: when the two
+    agree, the heat explains the drift.
+
+    Wrist sensors read high — body heat and sun put them several degrees above true air
+    temperature — so treat the range and the trend as sound and the absolutes as not.
+    """
+    session = fit.get("session") if isinstance(fit, dict) else None
+    stats = session.get("temperature_stats") if isinstance(session, dict) else None
+    if not isinstance(stats, dict):
+        return None
+
+    def num(key: str) -> float | None:
+        v = stats.get(key)
+        return float(v) if isinstance(v, (int, float)) else None
+
+    min_c, avg_c, max_c = num("min_temp_c"), num("avg_temp_c"), num("max_temp_c")
+    if min_c is None and avg_c is None and max_c is None:
+        return None
+    range_c = num("temp_range_c")
+    if range_c is None and min_c is not None and max_c is not None:
+        range_c = max_c - min_c
+
+    hr_cool, hr_hot = num("avg_hr_coolest_third_bpm"), num("avg_hr_hottest_third_bpm")
+    pw_cool, pw_hot = num("avg_power_coolest_third_w"), num("avg_power_hottest_third_w")
+    hr_delta = round(hr_hot - hr_cool, 1) if hr_cool and hr_hot else None
+    pw_delta_pct = round((pw_hot / pw_cool - 1) * 100, 1) if pw_cool and pw_hot else None
+
+    # Beats per watt: how much heart rate each unit of mechanical work cost.
+    cost_cool = hr_cool / pw_cool if hr_cool and pw_cool else None
+    cost_hot = hr_hot / pw_hot if hr_hot and pw_hot else None
+    drift_pct = round((cost_hot / cost_cool - 1) * 100, 1) if cost_cool and cost_hot else None
+
+    # "Heat drove this": the run genuinely warmed up, HR climbed, and power did *not*
+    # climb with it. Power rising would mean you simply ran harder late on.
+    heat_driven = bool(
+        range_c is not None and range_c >= 4
+        and hr_delta is not None and hr_delta >= 4
+        and pw_delta_pct is not None and pw_delta_pct <= 1
+    )
+
+    def r1(v: float | None) -> float | None:
+        return round(v, 1) if v is not None else None
+
+    return {
+        "min_c": r1(min_c), "avg_c": r1(avg_c), "max_c": r1(max_c), "range_c": r1(range_c),
+        "hr_cool_bpm": r1(hr_cool), "hr_hot_bpm": r1(hr_hot), "hr_delta_bpm": hr_delta,
+        "power_cool_w": r1(pw_cool), "power_hot_w": r1(pw_hot), "power_delta_pct": pw_delta_pct,
+        "cost_cool": round(cost_cool, 4) if cost_cool else None,
+        "cost_hot": round(cost_hot, 4) if cost_hot else None,
+        "heat_drift_pct": drift_pct,
+        "heat_driven": heat_driven,
+    }
+
+
 def body_battery_norm(bb: Any) -> list[dict]:
     """Normalize get_body_battery's list into per-day charged/drained/level rows."""
     if not isinstance(bb, list):
