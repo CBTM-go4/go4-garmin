@@ -219,7 +219,11 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
         "potential_predictions": potential_predictions,
         "fitness_trend": fitness_trend,
     }
-    ov["fitness"] = _fitness_level(ov, today, record=is_current)
+    # Deliberately NOT the selected window: the level is a property of the athlete, not
+    # of the chart range, so it always reads its own fixed lookback.
+    fit_runs = await g.runs_between(
+        today - timedelta(days=metrics.FITNESS_WINDOW_DAYS + CTL_WARMUP_DAYS), today)
+    ov["fitness"] = _fitness_level(fit_runs, today, record=is_current)
     ov["coach"] = coach.build(ov)
     return ov
 
@@ -372,24 +376,13 @@ async def compare(days: int = 90, start: str | None = None, end: str | None = No
     }
 
 
-def _fitness_level(ov: dict, today: date, record: bool = True) -> dict | None:
+def _fitness_level(fit_runs: list, today: date, record: bool = True) -> dict | None:
     """The single 0-100 fitness level, plus its 30-day trend once history exists.
 
-    VDOT comes from the athlete's own runs (the best-effort model, falling back to the
-    HR-threshold one) and never from Garmin's VO2max, which reads optimistic here.
+    Scoring lives in metrics.fitness_level, which slices its own fixed window out of
+    `fit_runs` — so the number is identical whichever range the dashboard is showing.
     """
-    series = ov.get("load_series") or []
-    myp = ov.get("my_predictions") or {}
-    pot = ov.get("potential_predictions") or {}
-    vdot = myp.get("vdot") or pot.get("vdot")
-
-    f = metrics.fitness_score(
-        ctl=series[-1]["ctl"] if series else None,
-        vdot=vdot,
-        runs=ov.get("runs") or [],
-        weekly=ov.get("weekly") or [],
-        easy_pct=(ov.get("zones") or {}).get("easy_pct"),
-    )
+    f = metrics.fitness_level(fit_runs, today)
     if not f or is_demo():
         return f
     try:

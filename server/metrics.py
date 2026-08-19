@@ -760,3 +760,57 @@ def fitness_score(ctl: float | None, vdot: float | None, runs: list[dict],
         # <1.0 when a pillar had no data, so the UI can say the score is partial.
         "confidence": round(total_weight, 2),
     }
+
+
+# A fitness *level* must not move when you change the chart range, so it reads a fixed
+# lookback rather than the selected window — the same trick the race predictions use.
+# 90 days is the shortest span where every pillar is actually computable: consistency
+# needs a full 12 weeks, and a shorter window would report weeks-without-runs that are
+# really just weeks outside the window.
+FITNESS_WINDOW_DAYS = 90
+_FITNESS_VDOT_DAYS = 120     # matches predict_races' own modelling window
+_FITNESS_WARMUP_DAYS = 120   # CTL is a 42d EMA; warm it up rather than cold-start it
+
+
+def fitness_level(hist_runs: list[dict], today: date,
+                  window_days: int = FITNESS_WINDOW_DAYS) -> dict | None:
+    """Assemble the fitness-score inputs over a fixed lookback and score them.
+
+    Everything is derived from a date-bounded slice of `hist_runs`, so passing extra
+    history (a longer dashboard range) cannot change the answer. Give it at least
+    `window_days + 120` days of runs for an accurate CTL.
+    """
+    warm_start = today - timedelta(days=window_days + _FITNESS_WARMUP_DAYS)
+    window_start = today - timedelta(days=window_days)
+    vdot_start = today - timedelta(days=_FITNESS_VDOT_DAYS)
+
+    hist, window, for_vdot = [], [], []
+    for r in hist_runs or []:
+        d = _run_date(r)
+        if not d or d < warm_start or d > today:
+            continue
+        hist.append(r)
+        if d >= window_start:
+            window.append(r)
+        if d >= vdot_start:
+            for_vdot.append(r)
+    if not hist:
+        return None
+
+    hrmax = hr_max(hist)
+    series = load_series(hist, hrmax, today, days=window_days)
+    best = predict_races(for_vdot, today)
+    threshold = predict_races_threshold(for_vdot, today, hrmax)
+    # Never Garmin's VO2max — it reads optimistic. Both fallbacks are the athlete's own runs.
+    vdot = (best or {}).get("vdot") or (threshold or {}).get("vdot")
+
+    f = fitness_score(
+        ctl=series[-1]["ctl"] if series else None,
+        vdot=vdot,
+        runs=window,
+        weekly=weekly_mileage(window, today),
+        easy_pct=approx_weekly_zones(window, hrmax)["easy_pct"] if window else None,
+    )
+    if f:
+        f["window_days"] = window_days
+    return f

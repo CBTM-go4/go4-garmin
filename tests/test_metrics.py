@@ -400,3 +400,27 @@ def test_fitness_score_renormalises_when_a_pillar_has_no_data():
 
 def test_fitness_score_none_without_any_data():
     assert m.fitness_score(ctl=None, vdot=None, runs=[], weekly=[], easy_pct=None) is None
+
+
+def test_fitness_level_is_independent_of_how_much_history_it_is_given():
+    """The regression guard for the range bug: a fitness *level* is a property of the
+    athlete, not of the dashboard's date range. Feeding it a year of runs must give the
+    same answer as feeding it the window plus CTL warm-up."""
+    long_history = daily_runs(TODAY, 400, km=8, minutes=50, avg_hr=150)
+    short_history = daily_runs(TODAY, m.FITNESS_WINDOW_DAYS + 120, km=8, minutes=50, avg_hr=150)
+    a = m.fitness_level(long_history, TODAY)
+    b = m.fitness_level(short_history, TODAY)
+    assert a["score"] == b["score"]
+    assert [p["score"] for p in a["pillars"]] == [p["score"] for p in b["pillars"]]
+    assert a["window_days"] == m.FITNESS_WINDOW_DAYS
+
+
+def test_fitness_level_ignores_runs_outside_its_window():
+    """A monster run from last year must not still be propping up Endurance today."""
+    recent = daily_runs(TODAY, 100, km=8, minutes=50, avg_hr=150)
+    with_old_epic = recent + [run(TODAY - timedelta(days=300), km=42, minutes=300, avg_hr=150)]
+    assert m.fitness_level(recent, TODAY)["score"] == m.fitness_level(with_old_epic, TODAY)["score"]
+
+
+def test_fitness_level_none_without_runs():
+    assert m.fitness_level([], TODAY) is None

@@ -1395,7 +1395,7 @@ function fitnessCard(f) {
 
   return h('div', { class: 'card fitness' }, [
     h('div', { class: 'chart-title' }, [h('h3', {}, 'Fitness Level'),
-      h('span', { class: 'hint' }, 'one number for the training itself — recovery is tracked separately')]),
+      h('span', { class: 'hint' }, `last ${f.window_days || 90} days · fixed, so it doesn't move with the range above`)]),
     head, track, h('div', { class: 'f-pillars' }, rows), ...notes,
   ]);
 }
