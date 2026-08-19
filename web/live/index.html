@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Garmin Coach Live Run</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%83%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css?v=18" />
+  <style>
+    .live-grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .metric { padding:14px; border-radius:14px; background: var(--surface-1); box-shadow: var(--shadow); }
+    .metric .k { font-size:.8rem; opacity:.7; margin-bottom:6px; }
+    .metric .v { font-size:1.8rem; font-weight:700; }
+    .btn-row { display:flex; gap:10px; flex-wrap:wrap; margin: 12px 0 0; }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; background: var(--surface-2); }
+    .status.good { border-left: 4px solid #1fa64a; }
+    .status.amber { border-left: 4px solid #c98b16; }
+    .status.red { border-left: 4px solid #d64545; }
+    .status.info { border-left: 4px solid #4d8bd6; }
+    .mono { font-variant-numeric: tabular-nums; }
+    .small { font-size:.92rem; opacity:.86; }
+    code.inline { padding:.15rem .35rem; border-radius:6px; background:var(--surface-2); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <h1>Live run bridge<span class="dot">.</span></h1>
+        <span class="sub">phone GPS + optional Bluetooth heart rate</span>
+      </div>
+      <span class="spacer"></span>
+      <a class="btn" href="/">Back to dashboard</a>
+    </header>
+
+    <div class="banner">
+      <h2>How it works</h2>
+      <p class="small">
+        Open this page on the phone, tap <strong>Start live run</strong>, then allow location access.
+        For automatic heart rate, connect a Bluetooth HR strap or a Garmin watch broadcasting HR to the phone.
+      </p>
+      <p class="small">
+        The page sends telemetry to the Pi every few seconds. I can coach off the live feed once it is connected.
+      </p>
+      <div class="btn-row">
+        <button class="btn" id="startBtn">Start live run</button>
+        <button class="btn" id="stopBtn">Stop</button>
+        <button class="btn" id="hrBtn">Connect HR sensor</button>
+        <button class="btn" id="refreshBtn">Refresh status</button>
+      </div>
+    </div>
+
+    <div class="card status info" id="statusCard">
+      <div class="chart-title">
+        <h3 id="statusHead">Waiting to start</h3>
+        <span class="hint" id="statusHint">No session active</span>
+      </div>
+      <div id="statusBody" class="small">Tap start, then begin your run.</div>
+    </div>
+
+    <div class="live-grid">
+      <div class="metric"><div class="k">Heart rate</div><div class="v mono" id="hrVal">–</div></div>
+      <div class="metric"><div class="k">Pace</div><div class="v mono" id="paceVal">–</div></div>
+      <div class="metric"><div class="k">Distance</div><div class="v mono" id="distVal">–</div></div>
+      <div class="metric"><div class="k">Elapsed</div><div class="v mono" id="timeVal">–</div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="chart-title">
+        <h3>Session</h3>
+        <span class="hint" id="sessionId">No session</span>
+      </div>
+      <div class="small" id="sessionMeta">Start a run to create the live session.</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="chart-title">
+        <h3>Alerts</h3>
+        <span class="hint">Only changes are shown</span>
+      </div>
+      <div id="alerts" class="small">No alerts yet.</div>
+    </div>
+  </div>
+  <script src="/live.js?v=18"></script>
+</body>
+</html>

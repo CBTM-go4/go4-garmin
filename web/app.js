@@ -1608,8 +1608,9 @@ function syncUrl() {
 
 // Switch between Dashboard, Goal Races and History. The range controls only apply to
 // the dashboard, so they're hidden on the other views.
-const VIEW_LOADERS = { dashboard: load, races: loadRaces, history: loadHistory, map: loadMap };
+const VIEW_LOADERS = { dashboard: load, races: loadRaces, history: loadHistory, map: loadMap, live: () => { location.href = '/live/'; } };
 function switchView(v) {
+  if (v === 'live') { location.href = '/live/'; return; }
   state.view = v;
   [...$('#tabs').children].forEach(b => b.classList.toggle('active', b.dataset.view === v));
   const onDash = v === 'dashboard';
@@ -1671,6 +1672,7 @@ $('#refreshBtn').addEventListener('click', async () => { await fetch('/api/refre
   for (const sel of ['#startDate', '#endDate']) $(sel).max = isoDay(new Date());
   reflectControls();
   const view = p.get('view');
-  if (view === 'history' || view === 'races' || view === 'map') switchView(view);
+  if (view === 'live') location.href = '/live';
+  else if (view === 'history' || view === 'races' || view === 'map') switchView(view);
   else load();
 })();

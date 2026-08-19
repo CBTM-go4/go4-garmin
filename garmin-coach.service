@@ -1,0 +1,17 @@
+[Unit]
+Description=Garmin Coach Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=go4
+WorkingDirectory=/home/go4/go4-garmin
+Environment=GARMIN_COACH_HOST=0.0.0.0
+Environment=GARMIN_COACH_PORT=8765
+Environment=PATH=/home/go4/.local/bin:/home/go4/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/go4/.local/bin/uv run --python 3.12 python -m server.app
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
