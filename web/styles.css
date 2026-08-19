@@ -383,3 +383,48 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .tabs button { padding: 8px 11px; font-size: 13px; }
 }
 
+
+/* ---------- global fitness level ---------- */
+.fitness { margin-bottom: 16px; }
+.fitness .f-head { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
+.fitness .f-score { display: flex; align-items: baseline; gap: 2px; }
+.fitness .f-score .n { font-size: 54px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+.fitness .f-score small { font-size: 15px; color: var(--muted); font-weight: 600; }
+.fitness .f-band { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.fitness .f-trend { margin-left: auto; text-align: right; }
+.fitness .f-trend .d { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* score colours, shared by the headline number, the pillar bars and their values */
+.fitness .good, .fitness .f-trend .good { color: var(--good-ink); }
+.fitness .ok { color: var(--fitness); }
+.fitness .warning { color: #9a6a00; }
+.fitness .critical, .fitness .f-trend .critical { color: var(--critical); }
+.fitness .muted { color: var(--muted); }
+@media (prefers-color-scheme: dark) { .fitness .warning { color: var(--warning); } }
+
+.fitness .f-track { height: 8px; border-radius: 999px; background: var(--grid); overflow: hidden; margin: 14px 0 4px; }
+.fitness .f-track > i { display: block; height: 100%; border-radius: 999px; background: var(--fitness); }
+
+.fitness .f-pillars { margin-top: 12px; border-top: 1px solid var(--border); }
+.fitness .f-p { display: grid; grid-template-columns: 96px 1fr 34px 128px 38px; align-items: center;
+                gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.fitness .f-p .l { font-size: 13.5px; font-weight: 600; }
+.fitness .f-p .b { height: 7px; border-radius: 999px; background: var(--grid); overflow: hidden; }
+.fitness .f-p .b > i { display: block; height: 100%; border-radius: 999px; background: currentColor; }
+.fitness .f-p .b > i.good { background: var(--good); }
+.fitness .f-p .b > i.ok { background: var(--fitness); }
+.fitness .f-p .b > i.warning { background: var(--warning); }
+.fitness .f-p .b > i.critical { background: var(--critical); }
+.fitness .f-p .v { font-size: 14px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.fitness .f-p .x { font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.fitness .f-p .w { font-size: 11.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+.fitness .f-note { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px;
+                   font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; }
+.fitness .f-note b { color: var(--text-primary); }
+
+@media (max-width: 640px) {
+  .fitness .f-p { grid-template-columns: 84px 1fr 32px; row-gap: 2px; }
+  .fitness .f-p .x { grid-column: 2 / 4; font-size: 12px; }
+  .fitness .f-p .w { display: none; }
+}

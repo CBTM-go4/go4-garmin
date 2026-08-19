@@ -951,6 +951,7 @@ function render(app, d) {
   // TRIMP load the runs table shows (Garmin's get_activity carries no load field).
   state.hrMax = d.hr_max; state.hrRest = d.hr_rest;
   app.append(h('div', { class: 'rangebar' }, rangeSummary(d)));
+  if (d.fitness) app.append(fitnessCard(d.fitness));
   const s = d.load_series || [], last = s[s.length - 1] || {};
   const c = d.coach || {};
   const ts = d.training_status || {}, hrv = d.hrv || {};
@@ -1334,6 +1335,71 @@ async function openRun(id, name) {
 const kb = (l, v) => h('div', { class: 'b' }, [h('div', { class: 'l' }, l), h('div', { class: 'v' }, String(v))]);
 
 // ---------- small helpers ----------
+// ---------- global fitness level ----------
+// Each pillar reads better with its own phrasing than with a bare unit suffix.
+const FITNESS_VALUE = {
+  engine: v => `VDOT ${v}`,
+  base: v => `CTL ${v}`,
+  endurance: v => `${v} km longest`,
+  consistency: v => `${v}% of weeks`,
+  balance: v => `${v}% easy`,
+};
+const fitnessSev = s => s == null ? 'muted' : s < 25 ? 'critical' : s < 50 ? 'warning' : s < 75 ? 'ok' : 'good';
+
+function fitnessCard(f) {
+  const pillars = f.pillars || [];
+  const head = h('div', { class: 'f-head' }, [
+    h('div', { class: 'f-score' }, [
+      h('span', { class: 'n ' + fitnessSev(f.score) }, String(f.score)),
+      h('small', {}, '/100'),
+    ]),
+    h('div', {}, [
+      h('div', { class: 'f-band' }, f.band || ''),
+      h('div', { class: 'hint' }, f.confidence != null && f.confidence < 0.999
+        ? `partial — ${Math.round(f.confidence * 100)}% of the picture has data`
+        : 'engine · base · endurance · consistency · balance'),
+    ]),
+  ]);
+
+  // Trend only exists once the dashboard has been open on separate days; there is no
+  // way to backfill it, so say that rather than showing a misleading flat zero.
+  const t = f.trend;
+  head.append(h('div', { class: 'f-trend' }, t
+    ? [h('div', { class: 'd ' + (t.delta > 0 ? 'good' : t.delta < 0 ? 'critical' : 'muted') },
+         `${t.delta > 0 ? '▲ +' : t.delta < 0 ? '▼ ' : '– '}${t.delta === 0 ? '' : Math.abs(t.delta)}`),
+       h('div', { class: 'hint' }, `vs ${t.score} on ${t.from}`)]
+    : [h('div', { class: 'hint' }, 'trend builds as you keep opening this')]));
+
+  const track = h('div', { class: 'f-track' }, [h('i', { style: `width:${Math.max(1, f.score)}%` })]);
+
+  const rows = pillars.map(p => h('div', { class: 'f-p', title: p.why }, [
+    h('div', { class: 'l' }, p.label),
+    h('div', { class: 'b' }, [h('i', { class: fitnessSev(p.score), style: `width:${p.score == null ? 0 : Math.max(1, p.score)}%` })]),
+    h('div', { class: 'v ' + fitnessSev(p.score) }, p.score == null ? '–' : String(Math.round(p.score))),
+    h('div', { class: 'x' }, p.value == null ? 'no data' : (FITNESS_VALUE[p.key] || (v => String(v)))(p.value)),
+    h('div', { class: 'w' }, `${p.weight}%`),
+  ]));
+
+  const weakest = pillars.find(p => p.key === f.limiter);
+  const most = pillars.find(p => p.key === f.headroom);
+  const notes = [];
+  if (weakest) notes.push(h('div', { class: 'f-note' }, [
+    h('span', { class: 'ic' }, '⚠️'),
+    h('div', {}, [h('b', {}, `Weakest link: ${weakest.label}. `), weakest.why]),
+  ]));
+  if (most && most.key !== f.limiter) notes.push(h('div', { class: 'f-note' }, [
+    h('span', { class: 'ic' }, '📈'),
+    h('div', {}, [h('b', {}, `Most points available: ${most.label}. `),
+      `It carries ${most.weight}% of the score and sits at ${Math.round(most.score)}/100.`]),
+  ]));
+
+  return h('div', { class: 'card fitness' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Fitness Level'),
+      h('span', { class: 'hint' }, 'one number for the training itself — recovery is tracked separately')]),
+    head, track, h('div', { class: 'f-pillars' }, rows), ...notes,
+  ]);
+}
+
 function tile(label, val, tag, unit) {
   return h('div', { class: 'card tile' }, [
     h('h3', {}, label),

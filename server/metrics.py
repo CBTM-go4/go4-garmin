@@ -656,3 +656,107 @@ def period_summary(runs: list[dict], hrmax: int) -> dict:
         "easy_pct": zones["easy_pct"],
         "hard_pct": zones["hard_pct"],
     }
+
+
+# ---- global fitness level -------------------------------------------------
+# One 0-100 number for "how fit am I", built from five things that move
+# independently. Each is scored against a fixed anchor rather than against the
+# athlete's own history: a personal-best-relative score would read 100 for someone
+# who has been detrained for years, which is the opposite of useful.
+#
+# Recovery (sleep, HRV, Body Battery) is deliberately NOT in here. That is
+# readiness for today's session, not fitness — a bad night should not move a
+# number that took months to build. It stays on its own tiles.
+_PILLARS = (
+    # key, label, weight, low anchor (=0), high anchor (=100), unit
+    ("engine",      "Engine",      0.30, 25.0, 60.0,  "VDOT"),
+    ("base",        "Base",        0.25,  0.0, 100.0, "CTL"),
+    ("endurance",   "Endurance",   0.20,  0.0, 32.0,  "km"),
+    ("consistency", "Consistency", 0.15,  0.0, 100.0, "% of weeks"),
+    ("balance",     "Balance",     0.10,  0.0, 80.0,  "% easy"),
+)
+
+_BANDS = ((20, "Base-building"), (40, "Developing"), (60, "Solid"),
+          (80, "Strong"), (101, "Exceptional"))
+
+_PILLAR_WHY = {
+    "engine": "Top-end aerobic power, from the VDOT your own best efforts imply.",
+    "base": "Chronic training load — the aerobic bank months of running build up.",
+    "endurance": "Longest run you've actually completed. What carries you late in a race.",
+    "consistency": "Share of recent weeks with real running in them. Gaps cost more than easy weeks.",
+    "balance": "Share of time run genuinely easy. The 80/20 rule — too little easy caps everything above.",
+}
+
+_CONSISTENT_RUNS = 2      # a week "counts" once it has this many runs
+_CONSISTENCY_WEEKS = 12
+
+
+def _band_score(value: float | None, lo: float, hi: float) -> float | None:
+    """Linear 0-100 between two anchors, clamped. None in, None out."""
+    if value is None:
+        return None
+    return round(max(0.0, min(100.0, 100 * (value - lo) / (hi - lo))), 1)
+
+
+def consistency_pct(weekly: list[dict], weeks: int = _CONSISTENCY_WEEKS) -> float | None:
+    """Percentage of the last `weeks` weeks that held at least a couple of runs."""
+    rows = [w for w in (weekly or []) if isinstance(w, dict)][-weeks:]
+    if not rows:
+        return None
+    hit = sum(1 for w in rows if (w.get("runs") or 0) >= _CONSISTENT_RUNS)
+    return round(100 * hit / len(rows), 1)
+
+
+def longest_run_km(runs: list[dict]) -> float | None:
+    dists = [(r.get("distance_meters") or 0) / 1000 for r in runs or []]
+    return round(max(dists), 1) if dists and max(dists) > 0 else None
+
+
+def fitness_score(ctl: float | None, vdot: float | None, runs: list[dict],
+                  weekly: list[dict], easy_pct: float | None) -> dict | None:
+    """Weighted 0-100 fitness level plus the breakdown that produced it.
+
+    Pillars with no data are dropped and the remaining weights renormalised, so a
+    missing VO2max reduces confidence rather than silently scoring zero. Returns
+    None only when nothing at all can be scored.
+    """
+    raw = {
+        "engine": vdot,
+        "base": ctl,
+        "endurance": longest_run_km(runs),
+        "consistency": consistency_pct(weekly),
+        "balance": easy_pct,
+    }
+
+    pillars, weighted, total_weight = [], 0.0, 0.0
+    for key, label, weight, lo, hi, unit in _PILLARS:
+        score = _band_score(raw[key], lo, hi)
+        pillars.append({
+            "key": key, "label": label, "weight": round(weight * 100),
+            "score": score, "value": raw[key], "unit": unit, "why": _PILLAR_WHY[key],
+        })
+        if score is not None:
+            weighted += score * weight
+            total_weight += weight
+
+    if not total_weight:
+        return None
+    score = round(weighted / total_weight)
+    band = next(name for edge, name in _BANDS if score < edge)
+
+    # The weakest link, by raw score — the honest "fix this first", regardless of how
+    # little weight it carries. A pillar can be small and still be the thing capping you.
+    scored = [p for p in pillars if p["score"] is not None]
+    limiter = min(scored, key=lambda p: p["score"])
+    # Where the most total points are actually available, which is a different question.
+    headroom = max(scored, key=lambda p: (100 - p["score"]) * p["weight"])
+
+    return {
+        "score": score,
+        "band": band,
+        "pillars": pillars,
+        "limiter": limiter["key"],
+        "headroom": headroom["key"],
+        # <1.0 when a pillar had no data, so the UI can say the score is partial.
+        "confidence": round(total_weight, 2),
+    }

@@ -329,3 +329,74 @@ def test_hr_max_from_observed(monkeypatch):
 def test_hr_max_default(monkeypatch):
     monkeypatch.delenv("GARMIN_COACH_HR_MAX", raising=False)
     assert m.hr_max([run(TODAY, max_hr=None)]) == 190
+
+
+# ---- global fitness level ------------------------------------------------
+def _weekly(n_weeks: int = 12, runs_per_week: int = 3, good_weeks: int | None = None):
+    """Weekly-mileage rows: `good_weeks` of them have real running, the rest are blank."""
+    good = n_weeks if good_weeks is None else good_weeks
+    return [{"week_start": f"2026-{i:02d}", "km": 25.0, "runs": runs_per_week if i < good else 0,
+             "load": 300.0} for i in range(n_weeks)]
+
+
+def test_consistency_pct_counts_weeks_with_real_running():
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=12)) == 100.0
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=11)) == 91.7
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=0)) == 0.0
+    # A single run in a week isn't consistency.
+    assert m.consistency_pct(_weekly(4, 1, good_weeks=4)) == 0.0
+    assert m.consistency_pct([]) is None
+
+
+def test_longest_run_km():
+    assert m.longest_run_km([run(TODAY, km=8), run(TODAY, km=18.12), run(TODAY, km=5)]) == 18.1
+    assert m.longest_run_km([]) is None
+    assert m.longest_run_km([run(TODAY, km=0)]) is None
+
+
+def test_fitness_score_golden():
+    # The real athlete's numbers on 2 Aug 2026.
+    f = m.fitness_score(ctl=43.7, vdot=29.8,
+                        runs=[run(TODAY, km=18.12), run(TODAY, km=5)],
+                        weekly=_weekly(12, 3, good_weeks=11), easy_pct=6.1)
+    by = {p["key"]: p for p in f["pillars"]}
+    assert by["engine"]["score"] == 13.7
+    assert by["base"]["score"] == 43.7
+    assert by["endurance"]["score"] == 56.6
+    assert by["consistency"]["score"] == 91.7
+    assert by["balance"]["score"] == 7.6
+    assert f["score"] == 41
+    assert f["band"] == "Solid"
+    assert f["confidence"] == 1.0
+    # Lowest raw score is the weakest link...
+    assert f["limiter"] == "balance"
+    # ...but the most points sit behind the heaviest under-performing pillar.
+    assert f["headroom"] == "engine"
+
+
+def test_fitness_score_anchors_clamp():
+    strong = m.fitness_score(ctl=200, vdot=80, runs=[run(TODAY, km=50)],
+                             weekly=_weekly(12, 5), easy_pct=95)
+    assert strong["score"] == 100 and strong["band"] == "Exceptional"
+    weak = m.fitness_score(ctl=0, vdot=10, runs=[run(TODAY, km=1)],
+                           weekly=_weekly(12, 3, good_weeks=0), easy_pct=0)
+    assert weak["score"] == 1 and weak["band"] == "Base-building"
+
+
+def test_fitness_score_renormalises_when_a_pillar_has_no_data():
+    """A missing VDOT must lower confidence, not score the engine as zero."""
+    full = m.fitness_score(ctl=50, vdot=40, runs=[run(TODAY, km=20)],
+                           weekly=_weekly(12, 3), easy_pct=80)
+    partial = m.fitness_score(ctl=50, vdot=None, runs=[run(TODAY, km=20)],
+                              weekly=_weekly(12, 3), easy_pct=80)
+    assert partial["confidence"] == 0.7
+    assert full["confidence"] == 1.0
+    engine = next(p for p in partial["pillars"] if p["key"] == "engine")
+    assert engine["score"] is None and engine["value"] is None
+    # The other four still carry their relative weights, so the score stays meaningful.
+    assert partial["score"] > 0
+    assert partial["limiter"] != "engine"
+
+
+def test_fitness_score_none_without_any_data():
+    assert m.fitness_score(ctl=None, vdot=None, runs=[], weekly=[], easy_pct=None) is None

@@ -219,6 +219,7 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
         "potential_predictions": potential_predictions,
         "fitness_trend": fitness_trend,
     }
+    ov["fitness"] = _fitness_level(ov, today, record=is_current)
     ov["coach"] = coach.build(ov)
     return ov
 
@@ -369,6 +370,38 @@ async def compare(days: int = 90, start: str | None = None, end: str | None = No
         "previous": {"start": prev_start.isoformat(), "end": prev_end.isoformat(),
                      **metrics.period_summary(prev_runs, hrmax)},
     }
+
+
+def _fitness_level(ov: dict, today: date, record: bool = True) -> dict | None:
+    """The single 0-100 fitness level, plus its 30-day trend once history exists.
+
+    VDOT comes from the athlete's own runs (the best-effort model, falling back to the
+    HR-threshold one) and never from Garmin's VO2max, which reads optimistic here.
+    """
+    series = ov.get("load_series") or []
+    myp = ov.get("my_predictions") or {}
+    pot = ov.get("potential_predictions") or {}
+    vdot = myp.get("vdot") or pot.get("vdot")
+
+    f = metrics.fitness_score(
+        ctl=series[-1]["ctl"] if series else None,
+        vdot=vdot,
+        runs=ov.get("runs") or [],
+        weekly=ov.get("weekly") or [],
+        easy_pct=(ov.get("zones") or {}).get("easy_pct"),
+    )
+    if not f or is_demo():
+        return f
+    try:
+        if record:
+            history.record_today(today, None, None, fitness_score=f["score"])
+        prev = history.earlier_score(today)
+        if prev:
+            f["trend"] = {"from": prev["date"], "score": round(prev["score"], 1),
+                          "delta": round(f["score"] - prev["score"], 1)}
+    except Exception:  # noqa: BLE001
+        pass
+    return f
 
 
 def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, predictions: Any,
