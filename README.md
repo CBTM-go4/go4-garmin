@@ -112,6 +112,8 @@ Open Claude Code in this folder, approve the `garmin` server, and ask things lik
 | `GET /api/run/{id}` | activity detail, splits, decoupling, HR-zone distribution, weather |
 | `GET /api/run/{id}/summary` | lightweight decoupling % + temperature (used to fill the runs table) |
 | `POST /api/refresh` | clear the cache |
+| `GET /live/` | phone-friendly live bridge for GPS and optional Bluetooth HR |
+| `GET /api/live/*` | live session state, start/update/stop endpoints |
 
 ## Tuning
 

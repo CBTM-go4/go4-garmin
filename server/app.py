@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cache, coach, demo, history, metrics, races, store, trackfill, tracks
+from . import cache, coach, demo, history, live, metrics, races, store, trackfill, tracks
 from .garmin import GarminData, is_demo
 from .mcp_client import GarminMCP
 
@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
             log.warning("MCP failed to start: %s", e)
     app.state.gd = GarminData(mcp)
     app.state.backfill = trackfill.Backfill()
+    app.state.live = live.LiveBridge()
     if is_demo():
         log.info("Running in DEMO mode (synthetic data)")
     elif mcp:
@@ -512,6 +513,44 @@ async def refresh():
     except Exception:  # noqa: BLE001
         pass
     return {"ok": True, "synced": written}
+
+
+# ---- Live run bridge -----------------------------------------------------
+
+@app.get("/live")
+async def live_page():
+    return FileResponse(WEB_DIR / "live.html")
+
+
+@app.get("/api/live/config")
+async def live_config():
+    return {"available": True, **app.state.live.defaults()}
+
+
+@app.get("/api/live/current")
+async def live_current():
+    return app.state.live.snapshot()
+
+
+@app.post("/api/live/start")
+async def live_start(payload: dict[str, Any] = Body(default_factory=dict)):
+    return app.state.live.start(payload)
+
+
+@app.post("/api/live/update")
+async def live_update(payload: dict[str, Any] = Body(default_factory=dict)):
+    try:
+        return app.state.live.update(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/live/stop")
+async def live_stop(payload: dict[str, Any] = Body(default_factory=dict)):
+    try:
+        return app.state.live.stop(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 # Static dashboard (mounted last so /api/* wins).
