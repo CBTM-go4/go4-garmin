@@ -187,7 +187,16 @@ def aerobic_efficiency(runs: list[dict], today: date) -> list[dict]:
 
 
 # ---- HR zones -------------------------------------------------------------
-_ZONE_EDGES = [0.60, 0.70, 0.80, 0.90]  # fractions of HRmax => Z1..Z5
+# Fractions of heart-rate RESERVE (Karvonen), not of HRmax. Reserve is what the
+# coaching prescribes against, and the two disagree badly at the easy end: with
+# HRmax 186 / rest 48, %HRmax puts the Z2 ceiling at 130 bpm while reserve puts it
+# at 145. Scoring against %HRmax marked correctly-run Z2 sessions as "not easy".
+_ZONE_EDGES = [0.60, 0.70, 0.80, 0.90]  # fractions of HR reserve => Z1..Z5
+
+
+def hr_reserve_fraction(hr: float, hrmax: int) -> float:
+    """Karvonen: where a heart rate sits between resting and max, clamped to 0-1."""
+    return max(0.0, min(1.0, (hr - HR_REST) / max(1, hrmax - HR_REST)))
 
 
 def hr_fraction_to_zone(frac: float) -> int:
@@ -200,7 +209,8 @@ def hr_fraction_to_zone(frac: float) -> int:
 def approx_weekly_zones(runs: list[dict], hrmax: int) -> dict:
     """Approximate time-in-zone across all runs from each run's average HR.
 
-    Cheap (no per-activity calls). Good enough for polarization at a glance.
+    Cheap (no per-activity calls). Good enough for polarization at a glance. Zones are
+    reserve-based, so "easy" here means the same thing it means in the training plan.
     """
     secs = [0.0] * 5
     for r in runs:
@@ -208,7 +218,7 @@ def approx_weekly_zones(runs: list[dict], hrmax: int) -> dict:
         dur = r.get("duration_seconds")
         if not (hr and dur):
             continue
-        z = hr_fraction_to_zone(hr / hrmax)
+        z = hr_fraction_to_zone(hr_reserve_fraction(hr, hrmax))
         secs[z - 1] += dur
     total = sum(secs) or 1
     zones = [{"zone": i + 1, "seconds": round(s), "pct": round(100 * s / total, 1)}

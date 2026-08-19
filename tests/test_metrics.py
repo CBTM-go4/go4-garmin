@@ -126,16 +126,28 @@ def test_hr_fraction_to_zone_boundaries(frac, zone):
     assert m.hr_fraction_to_zone(frac) == zone
 
 
+def test_hr_reserve_fraction_is_karvonen():
+    # The athlete's own numbers: HRmax 186 / rest 48 puts Z2 at 131-145 bpm.
+    assert m.hr_fraction_to_zone(m.hr_reserve_fraction(130, 186)) == 1
+    assert m.hr_fraction_to_zone(m.hr_reserve_fraction(131, 186)) == 2
+    assert m.hr_fraction_to_zone(m.hr_reserve_fraction(144, 186)) == 2
+    assert m.hr_fraction_to_zone(m.hr_reserve_fraction(145, 186)) == 3
+    # %HRmax would have called 143 bpm "Z3" — the bug this replaced.
+    assert m.hr_fraction_to_zone(m.hr_reserve_fraction(143, 186)) == 2
+    assert m.hr_reserve_fraction(48, 186) == 0.0
+    assert m.hr_reserve_fraction(200, 186) == 1.0   # clamped, never over 1
+
+
 def test_approx_weekly_zones_split():
-    # Two easy runs (Z2/Z3) and one hard (Z5); check easy/hard accounting.
+    # Reserve fractions off HRmax 190 / rest 48: 0.54 -> Z1, 0.72 -> Z3, 0.93 -> Z5.
     runs = [
-        run(TODAY, minutes=60, avg_hr=125, max_hr=190),  # 0.66 -> Z2
-        run(TODAY, minutes=60, avg_hr=150, max_hr=190),  # 0.79 -> Z3
-        run(TODAY, minutes=20, avg_hr=180, max_hr=190),  # 0.95 -> Z5
+        run(TODAY, minutes=60, avg_hr=125, max_hr=190),
+        run(TODAY, minutes=60, avg_hr=150, max_hr=190),
+        run(TODAY, minutes=20, avg_hr=180, max_hr=190),
     ]
     z = m.approx_weekly_zones(runs, 190)
     secs = {row["zone"]: row["seconds"] for row in z["zones"]}
-    assert secs[2] == 3600 and secs[3] == 3600 and secs[5] == 1200
+    assert secs[1] == 3600 and secs[3] == 3600 and secs[5] == 1200
     assert z["easy_pct"] == pytest.approx(100 * 3600 / 8400, abs=0.1)
     assert z["hard_pct"] == pytest.approx(100 * 1200 / 8400, abs=0.1)
 
