@@ -196,10 +196,77 @@ def test_decoupling_needs_four_laps():
 
 
 # ---- normalisers ---------------------------------------------------------
-def test_weather_fahrenheit_to_celsius():
+def test_weather_legacy_fahrenheit_to_celsius():
+    # Old garmin_mcp shape: '..._celsius' keys that actually carried °F.
     assert m.weather_norm({"temperature_celsius": 50})["temp_c"] == 10
     assert m.weather_norm({"temperature_celsius": 32})["temp_c"] == 0
     assert m.weather_norm({}) is None
+
+
+def test_weather_current_shape_respects_unit():
+    # Current shape: already converted, unit stated.
+    w = m.weather_norm({"temperature": 22.8, "temperature_unit": "C",
+                        "apparent_temperature": 24.2, "humidity_percent": 20})
+    assert w["temp_c"] == 23 and w["feels_c"] == 24 and w["humidity"] == 20
+    # A statute_us account keeps °F, so it still needs converting.
+    assert m.weather_norm({"temperature": 50, "temperature_unit": "F"})["temp_c"] == 10
+    # Unit absent → assume already °C rather than mangling it.
+    assert m.weather_norm({"temperature": 12})["temp_c"] == 12
+    assert m.weather_norm({"temperature": None, "temperature_unit": "C"}) is None
+
+
+def _fit(**stats):
+    return {"session": {"sport": "running", "temperature_stats": stats}}
+
+
+def test_fit_temperature_golden():
+    # Real numbers from the 2 Aug 2026 18 km long run (activity 23822063425).
+    t = m.fit_temperature(_fit(
+        avg_temp_c=25.1, min_temp_c=21, max_temp_c=30, temp_range_c=9,
+        avg_hr_coolest_third_bpm=137.5, avg_hr_hottest_third_bpm=149.1,
+        avg_power_coolest_third_w=196.9, avg_power_hottest_third_w=192.4))
+    assert (t["min_c"], t["max_c"], t["range_c"]) == (21.0, 30.0, 9.0)
+    assert t["hr_delta_bpm"] == 11.6
+    assert t["power_delta_pct"] == -2.3          # less work done in the heat
+    assert t["heat_drift_pct"] == 11.0           # beats-per-watt cost of the heat
+    assert t["heat_driven"] is True
+
+
+def test_fit_temperature_not_heat_when_power_rises():
+    # HR up because the run got harder, not hotter — power climbed with it.
+    t = m.fit_temperature(_fit(
+        min_temp_c=20, max_temp_c=26, temp_range_c=6,
+        avg_hr_coolest_third_bpm=140, avg_hr_hottest_third_bpm=155,
+        avg_power_coolest_third_w=190, avg_power_hottest_third_w=215))
+    assert t["hr_delta_bpm"] == 15.0
+    assert t["power_delta_pct"] == 13.2
+    assert t["heat_driven"] is False
+
+
+def test_fit_temperature_not_heat_on_a_steady_temperature():
+    t = m.fit_temperature(_fit(
+        min_temp_c=14, max_temp_c=16, temp_range_c=2,
+        avg_hr_coolest_third_bpm=140, avg_hr_hottest_third_bpm=152,
+        avg_power_coolest_third_w=190, avg_power_hottest_third_w=188))
+    assert t["heat_driven"] is False             # only 2°C — something else drove it
+
+
+def test_fit_temperature_derives_range_and_survives_missing_power():
+    t = m.fit_temperature(_fit(
+        min_temp_c=18, max_temp_c=27,            # no temp_range_c supplied
+        avg_hr_coolest_third_bpm=132, avg_hr_hottest_third_bpm=145))
+    assert t["range_c"] == 9.0
+    assert t["hr_delta_bpm"] == 13.0
+    assert t["heat_drift_pct"] is None           # can't cost it without power
+    assert t["heat_driven"] is False             # ...so never claimed as heat-driven
+
+
+def test_fit_temperature_none_without_stats():
+    assert m.fit_temperature(None) is None
+    assert m.fit_temperature({}) is None
+    assert m.fit_temperature({"session": {}}) is None
+    assert m.fit_temperature(_fit()) is None
+    assert m.fit_temperature(_fit(avg_temp_c=None)) is None
 
 
 def test_sleep_norm():
@@ -262,3 +329,98 @@ def test_hr_max_from_observed(monkeypatch):
 def test_hr_max_default(monkeypatch):
     monkeypatch.delenv("GARMIN_COACH_HR_MAX", raising=False)
     assert m.hr_max([run(TODAY, max_hr=None)]) == 190
+
+
+# ---- global fitness level ------------------------------------------------
+def _weekly(n_weeks: int = 12, runs_per_week: int = 3, good_weeks: int | None = None):
+    """Weekly-mileage rows: `good_weeks` of them have real running, the rest are blank."""
+    good = n_weeks if good_weeks is None else good_weeks
+    return [{"week_start": f"2026-{i:02d}", "km": 25.0, "runs": runs_per_week if i < good else 0,
+             "load": 300.0} for i in range(n_weeks)]
+
+
+def test_consistency_pct_counts_weeks_with_real_running():
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=12)) == 100.0
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=11)) == 91.7
+    assert m.consistency_pct(_weekly(12, 3, good_weeks=0)) == 0.0
+    # A single run in a week isn't consistency.
+    assert m.consistency_pct(_weekly(4, 1, good_weeks=4)) == 0.0
+    assert m.consistency_pct([]) is None
+
+
+def test_longest_run_km():
+    assert m.longest_run_km([run(TODAY, km=8), run(TODAY, km=18.12), run(TODAY, km=5)]) == 18.1
+    assert m.longest_run_km([]) is None
+    assert m.longest_run_km([run(TODAY, km=0)]) is None
+
+
+def test_fitness_score_golden():
+    # The real athlete's numbers on 2 Aug 2026.
+    f = m.fitness_score(ctl=43.7, vdot=29.8,
+                        runs=[run(TODAY, km=18.12), run(TODAY, km=5)],
+                        weekly=_weekly(12, 3, good_weeks=11), easy_pct=6.1)
+    by = {p["key"]: p for p in f["pillars"]}
+    assert by["engine"]["score"] == 13.7
+    assert by["base"]["score"] == 43.7
+    assert by["endurance"]["score"] == 56.6
+    assert by["consistency"]["score"] == 91.7
+    assert by["balance"]["score"] == 7.6
+    assert f["score"] == 41
+    assert f["band"] == "Solid"
+    assert f["confidence"] == 1.0
+    # Lowest raw score is the weakest link...
+    assert f["limiter"] == "balance"
+    # ...but the most points sit behind the heaviest under-performing pillar.
+    assert f["headroom"] == "engine"
+
+
+def test_fitness_score_anchors_clamp():
+    strong = m.fitness_score(ctl=200, vdot=80, runs=[run(TODAY, km=50)],
+                             weekly=_weekly(12, 5), easy_pct=95)
+    assert strong["score"] == 100 and strong["band"] == "Exceptional"
+    weak = m.fitness_score(ctl=0, vdot=10, runs=[run(TODAY, km=1)],
+                           weekly=_weekly(12, 3, good_weeks=0), easy_pct=0)
+    assert weak["score"] == 1 and weak["band"] == "Base-building"
+
+
+def test_fitness_score_renormalises_when_a_pillar_has_no_data():
+    """A missing VDOT must lower confidence, not score the engine as zero."""
+    full = m.fitness_score(ctl=50, vdot=40, runs=[run(TODAY, km=20)],
+                           weekly=_weekly(12, 3), easy_pct=80)
+    partial = m.fitness_score(ctl=50, vdot=None, runs=[run(TODAY, km=20)],
+                              weekly=_weekly(12, 3), easy_pct=80)
+    assert partial["confidence"] == 0.7
+    assert full["confidence"] == 1.0
+    engine = next(p for p in partial["pillars"] if p["key"] == "engine")
+    assert engine["score"] is None and engine["value"] is None
+    # The other four still carry their relative weights, so the score stays meaningful.
+    assert partial["score"] > 0
+    assert partial["limiter"] != "engine"
+
+
+def test_fitness_score_none_without_any_data():
+    assert m.fitness_score(ctl=None, vdot=None, runs=[], weekly=[], easy_pct=None) is None
+
+
+def test_fitness_level_is_independent_of_how_much_history_it_is_given():
+    """The regression guard for the range bug: a fitness *level* is a property of the
+    athlete, not of the dashboard's date range. Feeding it a year of runs must give the
+    same answer as feeding it the window plus CTL warm-up."""
+    long_history = daily_runs(TODAY, 400, km=8, minutes=50, avg_hr=150)
+    short_history = daily_runs(TODAY, m.FITNESS_WINDOW_DAYS + 120, km=8, minutes=50, avg_hr=150)
+    a = m.fitness_level(long_history, TODAY)
+    b = m.fitness_level(short_history, TODAY)
+    assert a["score"] == b["score"]
+    assert [p["score"] for p in a["pillars"]] == [p["score"] for p in b["pillars"]]
+    assert a["window_days"] == m.FITNESS_WINDOW_DAYS
+
+
+def test_fitness_level_ignores_runs_outside_its_window():
+    """A monster run from last year must not still be propping up Endurance today."""
+    recent = daily_runs(TODAY, 100, km=8, minutes=50, avg_hr=150)
+    with_old_epic = recent + [run(TODAY - timedelta(days=300), km=42, minutes=300, avg_hr=150)]
+    assert m.fitness_level(recent, TODAY)["score"] == m.fitness_level(with_old_epic, TODAY)["score"]
+
+
+def test_fitness_level_none_without_runs():
+    assert m.fitness_level([], TODAY) is None

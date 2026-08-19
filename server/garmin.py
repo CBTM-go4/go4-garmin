@@ -175,6 +175,11 @@ class GarminData:
     async def activity_weather(self, activity_id: int | str) -> Any:
         return await self._call("get_activity_weather", ttl=_STABLE_TTL, activity_id=activity_id)
 
+    async def activity_fit_data(self, activity_id: int | str) -> Any:
+        """FIT-file summary. The only source of *in-run* temperature — get_activity_weather
+        is a single reading taken at the start. See metrics.fit_temperature."""
+        return await self._call("get_activity_fit_data", ttl=_STABLE_TTL, activity_id=activity_id)
+
     # ---- daily health / training -----------------------------------------
     async def training_status(self, d: date) -> dict | None:
         return await self._call("get_training_status", ttl=_ttl_for(d.isoformat()), date=d.isoformat())

@@ -951,6 +951,7 @@ function render(app, d) {
   // TRIMP load the runs table shows (Garmin's get_activity carries no load field).
   state.hrMax = d.hr_max; state.hrRest = d.hr_rest;
   app.append(h('div', { class: 'rangebar' }, rangeSummary(d)));
+  if (d.fitness) app.append(fitnessCard(d.fitness));
   const s = d.load_series || [], last = s[s.length - 1] || {};
   const c = d.coach || {};
   const ts = d.training_status || {}, hrv = d.hrv || {};
@@ -1154,7 +1155,7 @@ function runsTable(runs, hrMax = 190, hrRest = 48) {
   const driftTh = headRow.children[7], tempTh = headRow.children[8];
   driftTh.setAttribute('title', 'Aerobic decoupling — Pa:HR drift, 1st vs 2nd half. Green <5% coupled · amber 5–8% · red >8% decoupled. Grey = too short to measure.');
   driftTh.classList.add('help');
-  tempTh.setAttribute('title', 'Air temperature during the run, from Garmin weather (converted to °C).');
+  tempTh.setAttribute('title', 'Air temperature at the START of the run, from Garmin weather (converted to °C). A long run can warm up several degrees after this reading — open the run for the range the watch actually logged.');
   tempTh.classList.add('help');
   t.append(h('thead', {}, headRow));
   const tb = h('tbody');
@@ -1225,7 +1226,7 @@ async function openRun(id, name) {
   bg.onclick = e => { if (e.target === bg) bg.classList.remove('open'); };
   let d;
   try { d = await (await fetch(`/api/run/${id}`)).json(); } catch { m.querySelector('.loading').textContent = 'Failed to load.'; return; }
-  const a = d.activity || {}, dc = d.decoupling, zd = d.zone_distribution, w = d.weather;
+  const a = d.activity || {}, dc = d.decoupling, zd = d.zone_distribution, w = d.weather, t = d.temperature;
   m.innerHTML = `<button class="close" id="mClose">×</button><h2>${a.name || name}</h2><div class="muted">${a.start_time_local ? new Date(a.start_time_local).toLocaleString() : ''}</div>`;
   $('#mClose').onclick = () => bg.classList.remove('open');
   const pace = a.duration_seconds && a.distance_meters ? a.duration_seconds / (a.distance_meters / 1000) : 0;
@@ -1240,7 +1241,10 @@ async function openRun(id, name) {
     kb('Training load', load != null ? `${load}` : '–'),
     kb('Training effect', a.training_effect != null ? Number(a.training_effect).toFixed(1) : '–'),
     kb('RPE', rpe != null ? rpe + '/10' : '–'),
-    w && w.temp_c != null ? kb('Temp', `${w.temp_c}°C`) : null,
+    // Two different things: the weather station's reading as you set off, and what the
+    // watch actually logged for the whole run. On a long run they diverge a lot.
+    w && w.temp_c != null ? kb('Temp at start', `${w.temp_c}°C`) : null,
+    t && t.min_c != null && t.max_c != null ? kb('Temp in run', `${t.min_c}–${t.max_c}°C`) : null,
     w && w.feels_c != null && w.feels_c !== w.temp_c ? kb('Feels like', `${w.feels_c}°C`) : null,
     w && w.humidity != null ? kb('Humidity', `${w.humidity}%`) : null,
   ].filter(Boolean));
@@ -1278,6 +1282,44 @@ async function openRun(id, name) {
       ]),
     ]));
   }
+  // Heat: the watch's own temperature log, split into the coolest and hottest thirds of
+  // the run. Power is pace-independent, so HR climbing while power doesn't separates
+  // thermal drift from genuine fade — which the decoupling figure above can't do alone.
+  if (t && t.range_c != null && t.hr_delta_bpm != null) {
+    m.append(h('div', { class: 'section-title' }, 'Heat'));
+    const w1 = t.power_cool_w, w2 = t.power_hot_w;
+    m.append(h('div', { class: 'kv', style: 'margin-bottom:10px' }, [
+      kb('Range', `${t.min_c}–${t.max_c}°C`),
+      kb('Coolest third', `${t.hr_cool_bpm} bpm${w1 != null ? ` · ${w1} W` : ''}`),
+      kb('Hottest third', `${t.hr_hot_bpm} bpm${w2 != null ? ` · ${w2} W` : ''}`),
+      t.heat_drift_pct != null ? kb('Cost of the heat', `${t.heat_drift_pct}%`) : null,
+    ].filter(Boolean)));
+
+    const up = t.hr_delta_bpm > 0 ? 'rose' : 'fell';
+    const pw = t.power_delta_pct != null
+      ? `power ${t.power_delta_pct <= 0 ? 'fell' : 'rose'} ${Math.abs(t.power_delta_pct)}%`
+      : null;
+    // When beats-per-watt and Pa:HR drift agree, the temperature explains the decoupling.
+    const explains = t.heat_driven && dc && t.heat_drift_pct != null
+      && Math.abs(t.heat_drift_pct - dc.decoupling_pct) <= 3;
+
+    const title = t.heat_driven
+      ? `Thermal drift — HR ${up} ${Math.abs(t.hr_delta_bpm)} bpm as it warmed ${t.range_c}°C`
+      : `It warmed ${t.range_c}°C during this run`;
+    const body = t.heat_driven
+      ? `Between the coolest and hottest thirds your heart rate ${up} ${Math.abs(t.hr_delta_bpm)} bpm${pw ? ` while ${pw}` : ''} — more heartbeats bought no extra work. That's your body shifting blood to the skin to cool itself, not your legs giving out.${explains ? ` It accounts for essentially all of the ${dc.decoupling_pct}% aerobic decoupling measured above, so read that number as heat rather than fatigue or fuelling.` : ''} On a run that heats up like this, holding a heart-rate cap means giving pace away late on — that's the cap working, not you fading. Starting earlier is the fix as the long runs get longer.`
+      : `Heart rate ${up} ${Math.abs(t.hr_delta_bpm)} bpm from the coolest third to the hottest${pw ? `, and ${pw}` : ''}. Not a big enough swing to explain much on its own — look to pacing, fuelling or fatigue for any drift above.`;
+
+    m.append(h('div', { class: 'insight ' + (t.heat_driven ? 'caution' : 'good') }, [
+      h('div', { class: 'ic' }, t.heat_driven ? '🌡️' : '✅'),
+      h('div', {}, [
+        h('div', { class: 't' }, title),
+        h('div', { class: 'x' }, body),
+        h('div', { class: 'x', style: 'margin-top:8px; color:var(--muted)' },
+          'From the watch\'s own temperature log (the FIT file), not the weather station — the “Temp at start” above is a single reading taken as you set off. Wrist sensors read several degrees high because of body heat and sun, so trust the range and the trend rather than the absolute numbers. “Cost of the heat” is how much your heart rate per watt of running power went up: 0% means the heat charged you nothing.'),
+      ]),
+    ]));
+  }
   if (zd?.zones?.length) {
     m.append(h('div', { class: 'section-title' }, 'Time in heart-rate zones'));
     const zColors = ['--z1', '--z2', '--z3', '--z4', '--z5'];
@@ -1293,6 +1335,71 @@ async function openRun(id, name) {
 const kb = (l, v) => h('div', { class: 'b' }, [h('div', { class: 'l' }, l), h('div', { class: 'v' }, String(v))]);
 
 // ---------- small helpers ----------
+// ---------- global fitness level ----------
+// Each pillar reads better with its own phrasing than with a bare unit suffix.
+const FITNESS_VALUE = {
+  engine: v => `VDOT ${v}`,
+  base: v => `CTL ${v}`,
+  endurance: v => `${v} km longest`,
+  consistency: v => `${v}% of weeks`,
+  balance: v => `${v}% easy`,
+};
+const fitnessSev = s => s == null ? 'muted' : s < 25 ? 'critical' : s < 50 ? 'warning' : s < 75 ? 'ok' : 'good';
+
+function fitnessCard(f) {
+  const pillars = f.pillars || [];
+  const head = h('div', { class: 'f-head' }, [
+    h('div', { class: 'f-score' }, [
+      h('span', { class: 'n ' + fitnessSev(f.score) }, String(f.score)),
+      h('small', {}, '/100'),
+    ]),
+    h('div', {}, [
+      h('div', { class: 'f-band' }, f.band || ''),
+      h('div', { class: 'hint' }, f.confidence != null && f.confidence < 0.999
+        ? `partial — ${Math.round(f.confidence * 100)}% of the picture has data`
+        : 'engine · base · endurance · consistency · balance'),
+    ]),
+  ]);
+
+  // Trend only exists once the dashboard has been open on separate days; there is no
+  // way to backfill it, so say that rather than showing a misleading flat zero.
+  const t = f.trend;
+  head.append(h('div', { class: 'f-trend' }, t
+    ? [h('div', { class: 'd ' + (t.delta > 0 ? 'good' : t.delta < 0 ? 'critical' : 'muted') },
+         `${t.delta > 0 ? '▲ +' : t.delta < 0 ? '▼ ' : '– '}${t.delta === 0 ? '' : Math.abs(t.delta)}`),
+       h('div', { class: 'hint' }, `vs ${t.score} on ${t.from}`)]
+    : [h('div', { class: 'hint' }, 'trend builds as you keep opening this')]));
+
+  const track = h('div', { class: 'f-track' }, [h('i', { style: `width:${Math.max(1, f.score)}%` })]);
+
+  const rows = pillars.map(p => h('div', { class: 'f-p', title: p.why }, [
+    h('div', { class: 'l' }, p.label),
+    h('div', { class: 'b' }, [h('i', { class: fitnessSev(p.score), style: `width:${p.score == null ? 0 : Math.max(1, p.score)}%` })]),
+    h('div', { class: 'v ' + fitnessSev(p.score) }, p.score == null ? '–' : String(Math.round(p.score))),
+    h('div', { class: 'x' }, p.value == null ? 'no data' : (FITNESS_VALUE[p.key] || (v => String(v)))(p.value)),
+    h('div', { class: 'w' }, `${p.weight}%`),
+  ]));
+
+  const weakest = pillars.find(p => p.key === f.limiter);
+  const most = pillars.find(p => p.key === f.headroom);
+  const notes = [];
+  if (weakest) notes.push(h('div', { class: 'f-note' }, [
+    h('span', { class: 'ic' }, '⚠️'),
+    h('div', {}, [h('b', {}, `Weakest link: ${weakest.label}. `), weakest.why]),
+  ]));
+  if (most && most.key !== f.limiter) notes.push(h('div', { class: 'f-note' }, [
+    h('span', { class: 'ic' }, '📈'),
+    h('div', {}, [h('b', {}, `Most points available: ${most.label}. `),
+      `It carries ${most.weight}% of the score and sits at ${Math.round(most.score)}/100.`]),
+  ]));
+
+  return h('div', { class: 'card fitness' }, [
+    h('div', { class: 'chart-title' }, [h('h3', {}, 'Fitness Level'),
+      h('span', { class: 'hint' }, `last ${f.window_days || 90} days · fixed, so it doesn't move with the range above`)]),
+    head, track, h('div', { class: 'f-pillars' }, rows), ...notes,
+  ]);
+}
+
 function tile(label, val, tag, unit) {
   return h('div', { class: 'card tile' }, [
     h('h3', {}, label),

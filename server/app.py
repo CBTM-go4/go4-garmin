@@ -219,6 +219,11 @@ async def overview(days: int = 90, start: str | None = None, end: str | None = N
         "potential_predictions": potential_predictions,
         "fitness_trend": fitness_trend,
     }
+    # Deliberately NOT the selected window: the level is a property of the athlete, not
+    # of the chart range, so it always reads its own fixed lookback.
+    fit_runs = await g.runs_between(
+        today - timedelta(days=metrics.FITNESS_WINDOW_DAYS + CTL_WARMUP_DAYS), today)
+    ov["fitness"] = _fitness_level(fit_runs, today, record=is_current)
     ov["coach"] = coach.build(ov)
     return ov
 
@@ -371,6 +376,27 @@ async def compare(days: int = 90, start: str | None = None, end: str | None = No
     }
 
 
+def _fitness_level(fit_runs: list, today: date, record: bool = True) -> dict | None:
+    """The single 0-100 fitness level, plus its 30-day trend once history exists.
+
+    Scoring lives in metrics.fitness_level, which slices its own fixed window out of
+    `fit_runs` — so the number is identical whichever range the dashboard is showing.
+    """
+    f = metrics.fitness_level(fit_runs, today)
+    if not f or is_demo():
+        return f
+    try:
+        if record:
+            history.record_today(today, None, None, fitness_score=f["score"])
+        prev = history.earlier_score(today)
+        if prev:
+            f["trend"] = {"from": prev["date"], "score": round(prev["score"], 1),
+                          "delta": round(f["score"] - prev["score"], 1)}
+    except Exception:  # noqa: BLE001
+        pass
+    return f
+
+
 def _fitness_trend(app: FastAPI, g: GarminData, today: date, days: int, predictions: Any,
                    record: bool = True) -> dict:
     """Accumulated VO2max + race-prediction trajectory (see history.py).
@@ -439,12 +465,20 @@ async def run_detail(activity_id: str):
     splits = await g.activity_splits(activity_id)
     hr_zones = await g.activity_hr_zones(activity_id)
     weather = metrics.weather_norm(await g.activity_weather(activity_id))
+    # Supplementary, and not every activity has a FIT file worth parsing — never let it
+    # take the whole modal down with it.
+    try:
+        fit = await g.activity_fit_data(activity_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("No FIT data for %s: %s", activity_id, e)
+        fit = None
     return {
         "activity": activity,
         "splits": metrics._laps(splits),
         "decoupling": metrics.decoupling(splits),
         "zone_distribution": metrics.run_zone_distribution(hr_zones),
         "weather": weather,
+        "temperature": metrics.fit_temperature(fit),
     }
 
 

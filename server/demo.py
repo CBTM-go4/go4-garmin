@@ -154,13 +154,47 @@ def call(tool: str, args: dict[str, Any]) -> Any:
         r = _by_id(args["activity_id"])
         if not r:
             return None
-        # Garmin reports °F; synthesize a plausible morning temp that way (warmer on
-        # the hotter/higher-decoupling long runs) so the °F→°C conversion is exercised.
+        # Match garmin_mcp's current shape: 'temperature' in the account's display
+        # unit, tagged by 'temperature_unit'. Warmer on the hotter/higher-decoupling
+        # long runs.
         rng = random.Random(r["id"])
-        f = 48 + rng.randint(0, 22) + (14 if r["km"] > 16 else 0)
-        return {"activity_id": r["id"], "temperature_celsius": f,
-                "apparent_temperature_celsius": f + rng.randint(-1, 4),
-                "humidity_percent": rng.randint(40, 80), "wind_speed_mps": rng.randint(0, 5)}
+        c = 9 + rng.randint(0, 12) + (8 if r["km"] > 16 else 0)
+        return {"activity_id": r["id"], "temperature": c, "temperature_unit": "C",
+                "apparent_temperature": c + rng.randint(-1, 2),
+                "humidity_percent": rng.randint(40, 80), "wind_speed": rng.randint(0, 18),
+                "wind_speed_unit": "km/h"}
+
+    if tool == "get_activity_fit_data":
+        r = _by_id(args["activity_id"])
+        if not r:
+            return None
+        # Mirror the real payload's session.temperature_stats. Morning runs heat up
+        # under you, so the long ones span the widest range — the same driver as
+        # r["decouple"], which is how the demo's hot long runs drift.
+        rng = random.Random(r["id"] + 1)
+        start_c = 9 + rng.randint(0, 8)
+        rise = round(2 + r["duration"] / 1500 + (5 if r["km"] > 16 else 0))
+        speed = 1000 / r["pace"]                       # m/s
+        pw_cool = round(speed * 62, 1)                 # rough running power
+        return {
+            "activity_id": r["id"],
+            "session": {
+                "sport": r["type"],
+                "total_distance_m": round(r["km"] * 1000, 1),
+                "avg_heart_rate_bpm": r["avg_hr"],
+                "temperature_stats": {
+                    "avg_temp_c": round(start_c + rise / 2, 1),
+                    "min_temp_c": start_c,
+                    "max_temp_c": start_c + rise,
+                    "temp_range_c": rise,
+                    "avg_hr_coolest_third_bpm": round(r["avg_hr"] * 0.97, 1),
+                    "avg_hr_hottest_third_bpm": round(r["avg_hr"] * (0.97 + r["decouple"] * 1.4), 1),
+                    "avg_power_coolest_third_w": pw_cool,
+                    "avg_power_hottest_third_w": round(pw_cool * 0.98, 1),
+                },
+            },
+            "laps": [],
+        }
 
     if tool == "get_training_status":
         d = date.fromisoformat(args["date"])

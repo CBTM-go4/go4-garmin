@@ -458,21 +458,103 @@ def sleep_norm(s: Any) -> dict | None:
 
 
 def weather_norm(w: Any) -> dict | None:
-    """Normalize get_activity_weather. Garmin returns temps in °F despite the field
-    name ('..._celsius'), so convert to °C for this metric account."""
+    """Normalize get_activity_weather to °C.
+
+    Two payload shapes exist. Current garmin_mcp returns 'temperature' already in the
+    account's display unit, tagged by 'temperature_unit' ("C" or "F"). Older builds
+    returned 'temperature_celsius' — misnamed, the value was really °F straight from
+    Garmin's weather station. Handle both so the runs table keeps its Temp column.
+    """
     if not isinstance(w, dict):
         return None
 
     def f2c(v):
         return round((v - 32) * 5 / 9) if isinstance(v, (int, float)) else None
 
-    t = f2c(w.get("temperature_celsius"))
+    def as_is(v):
+        return round(v) if isinstance(v, (int, float)) else None
+
+    if "temperature" in w:
+        conv = f2c if str(w.get("temperature_unit", "C")).upper().startswith("F") else as_is
+        raw_t, raw_feels = w.get("temperature"), w.get("apparent_temperature")
+    else:
+        conv = f2c
+        raw_t, raw_feels = w.get("temperature_celsius"), w.get("apparent_temperature_celsius")
+
+    t = conv(raw_t)
     if t is None:
         return None
     return {
         "temp_c": t,
-        "feels_c": f2c(w.get("apparent_temperature_celsius")),
+        "feels_c": conv(raw_feels),
         "humidity": w.get("humidity_percent"),
+    }
+
+
+def fit_temperature(fit: Any) -> dict | None:
+    """In-run temperature — and what it cost you — from the FIT file.
+
+    `weather_norm` above reads get_activity_weather, which is a single observation
+    stamped at the activity *start*. On a long run that heats up underneath you it
+    describes the first minute and nothing else. The watch logs temperature for the
+    whole activity; garmin_mcp summarises it as session.temperature_stats, including
+    average HR and power over the coolest and hottest thirds of the run.
+
+    Those thirds are what makes this diagnostic rather than trivia. Power is
+    pace-independent — it doesn't care about wind, gradient or stride — so HR rising
+    while power holds flat or falls means the extra heartbeats bought no extra work.
+    That is thermal drift, not fatigue or under-fuelling. Expressed as beats-per-watt
+    the change is directly comparable with `decoupling`'s Pa:HR figure: when the two
+    agree, the heat explains the drift.
+
+    Wrist sensors read high — body heat and sun put them several degrees above true air
+    temperature — so treat the range and the trend as sound and the absolutes as not.
+    """
+    session = fit.get("session") if isinstance(fit, dict) else None
+    stats = session.get("temperature_stats") if isinstance(session, dict) else None
+    if not isinstance(stats, dict):
+        return None
+
+    def num(key: str) -> float | None:
+        v = stats.get(key)
+        return float(v) if isinstance(v, (int, float)) else None
+
+    min_c, avg_c, max_c = num("min_temp_c"), num("avg_temp_c"), num("max_temp_c")
+    if min_c is None and avg_c is None and max_c is None:
+        return None
+    range_c = num("temp_range_c")
+    if range_c is None and min_c is not None and max_c is not None:
+        range_c = max_c - min_c
+
+    hr_cool, hr_hot = num("avg_hr_coolest_third_bpm"), num("avg_hr_hottest_third_bpm")
+    pw_cool, pw_hot = num("avg_power_coolest_third_w"), num("avg_power_hottest_third_w")
+    hr_delta = round(hr_hot - hr_cool, 1) if hr_cool and hr_hot else None
+    pw_delta_pct = round((pw_hot / pw_cool - 1) * 100, 1) if pw_cool and pw_hot else None
+
+    # Beats per watt: how much heart rate each unit of mechanical work cost.
+    cost_cool = hr_cool / pw_cool if hr_cool and pw_cool else None
+    cost_hot = hr_hot / pw_hot if hr_hot and pw_hot else None
+    drift_pct = round((cost_hot / cost_cool - 1) * 100, 1) if cost_cool and cost_hot else None
+
+    # "Heat drove this": the run genuinely warmed up, HR climbed, and power did *not*
+    # climb with it. Power rising would mean you simply ran harder late on.
+    heat_driven = bool(
+        range_c is not None and range_c >= 4
+        and hr_delta is not None and hr_delta >= 4
+        and pw_delta_pct is not None and pw_delta_pct <= 1
+    )
+
+    def r1(v: float | None) -> float | None:
+        return round(v, 1) if v is not None else None
+
+    return {
+        "min_c": r1(min_c), "avg_c": r1(avg_c), "max_c": r1(max_c), "range_c": r1(range_c),
+        "hr_cool_bpm": r1(hr_cool), "hr_hot_bpm": r1(hr_hot), "hr_delta_bpm": hr_delta,
+        "power_cool_w": r1(pw_cool), "power_hot_w": r1(pw_hot), "power_delta_pct": pw_delta_pct,
+        "cost_cool": round(cost_cool, 4) if cost_cool else None,
+        "cost_hot": round(cost_hot, 4) if cost_hot else None,
+        "heat_drift_pct": drift_pct,
+        "heat_driven": heat_driven,
     }
 
 
@@ -574,3 +656,161 @@ def period_summary(runs: list[dict], hrmax: int) -> dict:
         "easy_pct": zones["easy_pct"],
         "hard_pct": zones["hard_pct"],
     }
+
+
+# ---- global fitness level -------------------------------------------------
+# One 0-100 number for "how fit am I", built from five things that move
+# independently. Each is scored against a fixed anchor rather than against the
+# athlete's own history: a personal-best-relative score would read 100 for someone
+# who has been detrained for years, which is the opposite of useful.
+#
+# Recovery (sleep, HRV, Body Battery) is deliberately NOT in here. That is
+# readiness for today's session, not fitness — a bad night should not move a
+# number that took months to build. It stays on its own tiles.
+_PILLARS = (
+    # key, label, weight, low anchor (=0), high anchor (=100), unit
+    ("engine",      "Engine",      0.30, 25.0, 60.0,  "VDOT"),
+    ("base",        "Base",        0.25,  0.0, 100.0, "CTL"),
+    ("endurance",   "Endurance",   0.20,  0.0, 32.0,  "km"),
+    ("consistency", "Consistency", 0.15,  0.0, 100.0, "% of weeks"),
+    ("balance",     "Balance",     0.10,  0.0, 80.0,  "% easy"),
+)
+
+_BANDS = ((20, "Base-building"), (40, "Developing"), (60, "Solid"),
+          (80, "Strong"), (101, "Exceptional"))
+
+_PILLAR_WHY = {
+    "engine": "Top-end aerobic power, from the VDOT your own best efforts imply.",
+    "base": "Chronic training load — the aerobic bank months of running build up.",
+    "endurance": "Longest run you've actually completed. What carries you late in a race.",
+    "consistency": "Share of recent weeks with real running in them. Gaps cost more than easy weeks.",
+    "balance": "Share of time run genuinely easy. The 80/20 rule — too little easy caps everything above.",
+}
+
+_CONSISTENT_RUNS = 2      # a week "counts" once it has this many runs
+_CONSISTENCY_WEEKS = 12
+
+
+def _band_score(value: float | None, lo: float, hi: float) -> float | None:
+    """Linear 0-100 between two anchors, clamped. None in, None out."""
+    if value is None:
+        return None
+    return round(max(0.0, min(100.0, 100 * (value - lo) / (hi - lo))), 1)
+
+
+def consistency_pct(weekly: list[dict], weeks: int = _CONSISTENCY_WEEKS) -> float | None:
+    """Percentage of the last `weeks` weeks that held at least a couple of runs."""
+    rows = [w for w in (weekly or []) if isinstance(w, dict)][-weeks:]
+    if not rows:
+        return None
+    hit = sum(1 for w in rows if (w.get("runs") or 0) >= _CONSISTENT_RUNS)
+    return round(100 * hit / len(rows), 1)
+
+
+def longest_run_km(runs: list[dict]) -> float | None:
+    dists = [(r.get("distance_meters") or 0) / 1000 for r in runs or []]
+    return round(max(dists), 1) if dists and max(dists) > 0 else None
+
+
+def fitness_score(ctl: float | None, vdot: float | None, runs: list[dict],
+                  weekly: list[dict], easy_pct: float | None) -> dict | None:
+    """Weighted 0-100 fitness level plus the breakdown that produced it.
+
+    Pillars with no data are dropped and the remaining weights renormalised, so a
+    missing VO2max reduces confidence rather than silently scoring zero. Returns
+    None only when nothing at all can be scored.
+    """
+    raw = {
+        "engine": vdot,
+        "base": ctl,
+        "endurance": longest_run_km(runs),
+        "consistency": consistency_pct(weekly),
+        "balance": easy_pct,
+    }
+
+    pillars, weighted, total_weight = [], 0.0, 0.0
+    for key, label, weight, lo, hi, unit in _PILLARS:
+        score = _band_score(raw[key], lo, hi)
+        pillars.append({
+            "key": key, "label": label, "weight": round(weight * 100),
+            "score": score, "value": raw[key], "unit": unit, "why": _PILLAR_WHY[key],
+        })
+        if score is not None:
+            weighted += score * weight
+            total_weight += weight
+
+    if not total_weight:
+        return None
+    score = round(weighted / total_weight)
+    band = next(name for edge, name in _BANDS if score < edge)
+
+    # The weakest link, by raw score — the honest "fix this first", regardless of how
+    # little weight it carries. A pillar can be small and still be the thing capping you.
+    scored = [p for p in pillars if p["score"] is not None]
+    limiter = min(scored, key=lambda p: p["score"])
+    # Where the most total points are actually available, which is a different question.
+    headroom = max(scored, key=lambda p: (100 - p["score"]) * p["weight"])
+
+    return {
+        "score": score,
+        "band": band,
+        "pillars": pillars,
+        "limiter": limiter["key"],
+        "headroom": headroom["key"],
+        # <1.0 when a pillar had no data, so the UI can say the score is partial.
+        "confidence": round(total_weight, 2),
+    }
+
+
+# A fitness *level* must not move when you change the chart range, so it reads a fixed
+# lookback rather than the selected window — the same trick the race predictions use.
+# 90 days is the shortest span where every pillar is actually computable: consistency
+# needs a full 12 weeks, and a shorter window would report weeks-without-runs that are
+# really just weeks outside the window.
+FITNESS_WINDOW_DAYS = 90
+_FITNESS_VDOT_DAYS = 120     # matches predict_races' own modelling window
+_FITNESS_WARMUP_DAYS = 120   # CTL is a 42d EMA; warm it up rather than cold-start it
+
+
+def fitness_level(hist_runs: list[dict], today: date,
+                  window_days: int = FITNESS_WINDOW_DAYS) -> dict | None:
+    """Assemble the fitness-score inputs over a fixed lookback and score them.
+
+    Everything is derived from a date-bounded slice of `hist_runs`, so passing extra
+    history (a longer dashboard range) cannot change the answer. Give it at least
+    `window_days + 120` days of runs for an accurate CTL.
+    """
+    warm_start = today - timedelta(days=window_days + _FITNESS_WARMUP_DAYS)
+    window_start = today - timedelta(days=window_days)
+    vdot_start = today - timedelta(days=_FITNESS_VDOT_DAYS)
+
+    hist, window, for_vdot = [], [], []
+    for r in hist_runs or []:
+        d = _run_date(r)
+        if not d or d < warm_start or d > today:
+            continue
+        hist.append(r)
+        if d >= window_start:
+            window.append(r)
+        if d >= vdot_start:
+            for_vdot.append(r)
+    if not hist:
+        return None
+
+    hrmax = hr_max(hist)
+    series = load_series(hist, hrmax, today, days=window_days)
+    best = predict_races(for_vdot, today)
+    threshold = predict_races_threshold(for_vdot, today, hrmax)
+    # Never Garmin's VO2max — it reads optimistic. Both fallbacks are the athlete's own runs.
+    vdot = (best or {}).get("vdot") or (threshold or {}).get("vdot")
+
+    f = fitness_score(
+        ctl=series[-1]["ctl"] if series else None,
+        vdot=vdot,
+        runs=window,
+        weekly=weekly_mileage(window, today),
+        easy_pct=approx_weekly_zones(window, hrmax)["easy_pct"] if window else None,
+    )
+    if f:
+        f["window_days"] = window_days
+    return f

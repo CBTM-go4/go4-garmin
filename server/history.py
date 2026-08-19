@@ -28,6 +28,10 @@ def _conn() -> sqlite3.Connection:
         " vo2_checked INTEGER NOT NULL DEFAULT 0,"  # 1 = we've queried Garmin for this date
         " p5k INTEGER, p10k INTEGER, phm INTEGER, pm INTEGER)"
     )
+    # Added after the table shipped, so existing databases need the column bolted on.
+    have = {r[1] for r in conn.execute("PRAGMA table_info(fitness_snapshot)")}
+    if "fscore" not in have:
+        conn.execute("ALTER TABLE fitness_snapshot ADD COLUMN fscore REAL")
     return conn
 
 
@@ -42,8 +46,9 @@ def _upsert(conn: sqlite3.Connection, d: str, **cols) -> None:
     )
 
 
-def record_today(today: date, vo2max: float | None, predictions: dict | None) -> None:
-    """Snapshot today's VO2max + race predictions. Called on each overview load."""
+def record_today(today: date, vo2max: float | None, predictions: dict | None,
+                 fitness_score: float | None = None) -> None:
+    """Snapshot today's VO2max + race predictions + fitness level. Called on each load."""
     d = today.isoformat()
     with _conn() as conn:
         if vo2max is not None:
@@ -51,6 +56,8 @@ def record_today(today: date, vo2max: float | None, predictions: dict | None) ->
         p = _pred_seconds(predictions)
         if p:
             _upsert(conn, d, p5k=p["5K"], p10k=p["10K"], phm=p["half_marathon"], pm=p["marathon"])
+        if fitness_score is not None:
+            _upsert(conn, d, fscore=float(fitness_score))
         conn.commit()
 
 
@@ -104,7 +111,7 @@ def series(today: date, days: int) -> dict:
     start = (today - timedelta(days=days)).isoformat()
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT date, vo2max, p5k, p10k, phm, pm FROM fitness_snapshot "
+            "SELECT date, vo2max, p5k, p10k, phm, pm, fscore FROM fitness_snapshot "
             "WHERE date >= ? ORDER BY date",
             (start,),
         ).fetchall()
@@ -113,4 +120,21 @@ def series(today: date, days: int) -> dict:
         {"date": r[0], "p5k": r[2], "p10k": r[3], "phm": r[4], "pm": r[5]}
         for r in rows if any(r[2:6])
     ]
-    return {"vo2max": vo2, "predictions": preds}
+    score = [{"date": r[0], "value": r[6]} for r in rows if r[6] is not None]
+    return {"vo2max": vo2, "predictions": preds, "fitness_score": score}
+
+
+def earlier_score(today: date, days_back: int = 30) -> dict | None:
+    """Nearest stored fitness level at or before `days_back` ago, for a trend arrow.
+
+    The trajectory only exists once the dashboard has been loaded a few times -- there is
+    no way to backfill it, since the score depends on data Garmin only serves for today.
+    """
+    target = (today - timedelta(days=days_back)).isoformat()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT date, fscore FROM fitness_snapshot "
+            "WHERE fscore IS NOT NULL AND date <= ? ORDER BY date DESC LIMIT 1",
+            (target,),
+        ).fetchone()
+    return {"date": row[0], "score": row[1]} if row else None
